@@ -10,8 +10,18 @@ llm:
   lightweight:
     id: phi-3.5-mini-instruct-q4_0
     temperature: 0.4
-  optional_models: {}
-  skip_checksum: false
+  optional_models:
+    judge_small:
+      enabled: true
+      id: phi-3.5-mini-judge
+      load_mode: on_demand
+      idle_unload_seconds: 180
+      reasoning_default: low
+      reasoning_overrides: {}
+      timeouts:
+        judge_ms: 3000
+        plan_ms: 6000
+  skip_checksum: true  # dev: placeholder checksum for optional model
   load_timeout_ms: 15000
   reasoning_presets:
     low:

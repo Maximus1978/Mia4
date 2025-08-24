@@ -1,0 +1,9 @@
+id: phi-3.5-mini-judge
+family: phi
+role: judge
+path: models/phi-3.5-mini-instruct-q4_0.gguf
+quant: q4_0
+context_length: 8192
+capabilities: [judge]
+checksum_sha256: "0000000000000000000000000000000000000000000000000000000000000000"  # placeholder (skip_checksum true for dev)
+revision: r1
