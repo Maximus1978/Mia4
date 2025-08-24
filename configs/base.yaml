@@ -1,0 +1,66 @@
+llm:
+  primary:
+  # Selected via scripts/compare_models.py (reports/compare_models.json) on 2025-08-24: MXFP4 outperformed Q4_K_M in short & long tps
+  id: gpt-oss-20b-mxfp4
+    temperature: 0.7
+    top_p: 0.9
+    max_output_tokens: 1024
+    n_gpu_layers: auto
+  lightweight:
+    id: phi-3.5-mini-instruct-q4_0
+    temperature: 0.4
+  optional_models: {}
+  skip_checksum: false
+  load_timeout_ms: 15000
+  reasoning_presets:
+    low:
+      temperature: 0.6
+      top_p: 0.9
+    medium:
+      temperature: 0.7
+      top_p: 0.92
+    high:
+      temperature: 0.85
+      top_p: 0.95
+embeddings:
+  main:
+    id: bge-m3
+  fallback:
+    id: gte-small
+rag:
+  collection_default: memory
+  top_k: 8
+  hybrid:
+    weight_semantic: 0.6
+    weight_bm25: 0.4
+  normalize:
+    min_score: 0.0
+    max_score: 1.0
+emotion:
+  model:
+    id: distilroberta-multilingual-emotion
+  fsm:
+    hysteresis_ms: 2000
+reflection:
+  enabled: true
+  schedule:
+    cron: "0 3 * * *"
+metrics:
+  export:
+    prometheus_port: 9090
+logging:
+  level: info
+  format: json
+storage:
+  paths:
+    models: models
+    cache: .cache
+    data: data
+system:
+  locale: ru-RU
+  timezone: Europe/Moscow
+perf:
+  thresholds:
+  # Tightened after switch to MXFP4 (higher baseline throughput)
+  tps_regression_pct: 0.12  # was 0.15
+  p95_regression_pct: 0.18  # was 0.20

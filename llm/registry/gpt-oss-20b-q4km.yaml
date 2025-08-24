@@ -1,0 +1,10 @@
+## Legacy quant (former primary) retained for regression comparisons.
+id: gpt-oss-20b-q4km
+family: gpt-oss
+role: secondary  # downgraded 2025-08-24 (MXFP4 promoted to primary)
+path: models/gpt-oss-20b-GGUF/gpt-oss-20b-Q4_K_M.gguf
+quant: q4_k_m
+context_length: 32768
+capabilities: [chat, judge, plan, long_context]
+checksum_sha256: b085ad4c18cac9919b261a71f26ce0ca83e70d95c940cdd10b106d73bfff0f47
+revision: r1
