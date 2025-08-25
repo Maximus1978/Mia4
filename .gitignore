@@ -1,0 +1,49 @@
+# Virtual environment
+.venv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# VSCode
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local overrides
+configs/overrides.local.yaml
+
+# Model weights (large)
+models/*
+!models/.keep
+
+# Memory / vector stores
+memory/*
+!memory/.keep
+
+# Logs & reports
+logs/
+*.log
+reports/
+!reports/baseline/
+!reports/baseline/*.json
+
+# Lock / build artifacts
+*.egg-info/
+.build/
+.dist/
+
+# Pytest cache
+.pytest_cache/
+
+# Coverage
+htmlcov/
+.coverage*
+
+# Generated artifacts
+artifacts/
+
+# Lock file
+requirements.lock
