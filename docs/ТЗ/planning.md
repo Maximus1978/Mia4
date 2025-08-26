@@ -18,11 +18,11 @@
 
 | # | Item | Description | Priority | Criticality | Effort | Status | ADR |
 |---|------|-------------|----------|-------------|--------|--------|-----|
-| 1 | Thread safety LLMModule | lock load/unload | P1 | High | S | Pending | - |
-| 2 | ENV override audit | log applied env keys | P2 | Medium | S | Pending | - |
-| 3 | Config validations | normalize n_gpu_layers etc | P2 | Medium | S | Pending | - |
-| 4 | Bi-dir schema test | registry ↔ runtime match | P1 | High | M | Pending | - |
-| 5 | AST import graph | (moved from Phase0 #3) | P2 | High | M | Pending | - |
+| 1 | Thread safety LLMModule | lock load/unload | P1 | High | S | [x] Done | - |
+| 2 | ENV override audit | log applied env keys | P2 | Medium | S | [x] Done | - |
+| 3 | Config validations | normalize n_gpu_layers etc | P2 | Medium | S | [x] Done | - |
+| 4 | Bi-dir schema test | registry ↔ runtime match | P1 | High | M | [x] Done | - |
+| 5 | AST import graph | (moved from Phase0 #3) | P2 | High | M | [x] Done | ADR-0013 |
 
 ## Фаза 2 — UI Shell (MVP)
 

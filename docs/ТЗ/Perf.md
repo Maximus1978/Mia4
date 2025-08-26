@@ -105,6 +105,19 @@ llm:
 	- regression flags: drop >12% short_tps or >15% long_tps vs last accepted report
 	- p95_long/p95_short ≤ 1.30 (draft; tighten after FMHA activation)
 	- acceptable p95_short drift run-to-run ≤ +10%; above triggers investigation
+	- EventBus dispatch overhead ≤ 2% of total generation wall time for a representative micro benchmark (see below)
+
+### EventBus Overhead Threshold (Formalization)
+
+Micro benchmark: `scripts/perf_eventbus_overhead.py` (2000 synthetic `GenerationCompleted` emits) — current mean overhead ≈17.6µs/event (≈35.2ms total). При типичной короткой генерации (≈1500–2000ms) это <2%. Политика:
+
+1. Overhead Ratio = (eventbus_total_dispatch_ms / generation_total_ms_baseline) * 100%.
+2. Порог: Overhead Ratio ≤ 2.0% (HARD FAIL при превышении в регрессионном отчёте).
+3. Процедура подтверждения регрессии: 3 повторных прогона; если все >2% → задача perf-investigation (в changelog) перед merge.
+4. Исключения: временно допускается до 2.5% при добавлении критичных метрик / трассировки, только с обновлением этого раздела (rationale) и ADR ссылки.
+5. Метрики для будущего автоматического сбора: `eventbus.dispatch_latency_accum_ms`, `eventbus.events_total`; агрегатор вычисляет среднее и относительный overhead.
+
+Rationale: удержание накладных расходов инфраструктуры (шина событий) в пределах бюджета (<5% общих системных накладных, из которых EventBus резервирует ≤2%) защищает масштабируемость при росте числа подписчиков.
 
 ## Notes
 

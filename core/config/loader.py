@@ -1,17 +1,14 @@
-"""Configuration loading and validation (S1 modular refactor).
+"""Configuration loading & validation (S1 refactor).
 
-Changes introduced in S1:
-- Split monolithic RootConfig into per-module schemas under `core.config.schemas.*`.
-- Added top-level `schema_version` (migration: legacy configs without it → set to 1 with warning).
-- Added `modules.enabled` list to declare which modules are active (future ModuleManager).
-- AggregatedConfig stores references to validated sub-schemas but is itself decoupled (type Any).
+Changes S1:
+- Split RootConfig into per-module schemas (`core.config.schemas.*`).
+- Added `schema_version` (legacy missing → assume 1, warn).
+- Added `modules.enabled` (future ModuleManager).
+- AggregatedConfig holds validated sub-schemas (opaque here).
 
-Layer order (highest precedence last merge wins):
-1. base.yaml
-2. overrides.local.yaml (ignore if missing)
-3. ENV (prefix MIA__ using double underscore to denote nesting)
+Precedence (last wins): base.yaml → overrides.local.yaml → ENV (MIA__*).
 
-Unknown keys inside sub-schemas still rejected (validated separately after migration).
+Unknown sub-schema keys still rejected post‑migration.
 """
 from __future__ import annotations
 
@@ -22,10 +19,12 @@ from functools import lru_cache
 from typing import Any, Dict, List, Type
 
 import yaml
+from core import metrics
+from core.errors import validate_error_type
 from pydantic import BaseModel, Field, ConfigDict
 
 # Import sub-schemas (decoupled)
-from .schemas.llm import LLMConfig, PrimaryLLMConfig, LightweightLLMConfig, OptionalMoEConfig, OptionalMoETimeouts  # noqa: F401
+from .schemas.llm import LLMConfig  # noqa: F401
 from .schemas.rag import RAGConfig  # noqa: F401
 from .schemas.perf import PerfConfig  # noqa: F401
 from .schemas.core import (
@@ -59,9 +58,9 @@ class AggregatedConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+
 DEFAULT_CONFIG_DIR = "configs"
 ENV_PREFIX = "MIA__"
-
 
 LEGACY_MODULE_KEYS = [
     "llm",
@@ -134,7 +133,17 @@ def _apply_env(cfg: Dict[str, Any]) -> None:
                     cast_val = float(value)
                 except ValueError:
                     cast_val = value
+        # Apply override
         target[leaf] = cast_val
+    # Metrics + structured log (stdout; future: replace with logging module)
+        dotted_path = ".".join(path_parts)
+        try:
+            metrics.inc("env_override_total", {"path": dotted_path})
+        except Exception:  # pragma: no cover - safety
+            pass
+        print(
+            f"[config-env-override] path={dotted_path} value=*** source=env"
+        )  # noqa: T201
 
 
 _lock = threading.Lock()
@@ -154,7 +163,9 @@ def _migrate_legacy(data: Dict[str, Any]) -> Dict[str, Any]:
     """
     if "schema_version" not in data:
         # Simple stdout warn (observability module not yet abstracted here)
-        print("[config-migration] schema_version missing → assuming 1")  # noqa: T201
+        print(
+            "[config-migration] schema_version missing → assuming 1"
+        )  # noqa: T201
         data["schema_version"] = 1
     if "modules" not in data:
         enabled = [k for k in LEGACY_MODULE_KEYS if k in data]
@@ -176,8 +187,75 @@ def _validate_sub_schemas(raw: Dict[str, Any]) -> Dict[str, Any]:
             try:
                 validated[name] = cls.model_validate(raw[name])
             except Exception as e:  # noqa: BLE001
-                raise ConfigError(f"Validation failed for module '{name}': {e}") from e
+                raise ConfigError(
+                    f"Validation failed for module '{name}': {e}"
+                ) from e
     return validated
+
+
+def _normalize_and_validate(raw: Dict[str, Any]) -> None:
+    """Apply cross-field normalizations and bounds validation.
+
+    Emits metrics on violations and raises ConfigError if any hard errors.
+    Normalizations:
+      - llm.primary.n_gpu_layers: if int < 0 -> 0 (clip); leave 'auto' as is.
+    Validations (error → raise):
+      - llm.primary.top_p in (0, 1] (strict lower bound >0)
+      - llm.primary.max_output_tokens > 0
+    Temperature already validated by schema.
+    """
+    errors: list[tuple[str, str, str]] = []  # (path, code, msg)
+    # n_gpu_layers normalization
+    try:
+        ngl = raw.get("llm", {}).get("primary", {}).get("n_gpu_layers")
+        if isinstance(ngl, int) and ngl < 0:
+            raw["llm"]["primary"]["n_gpu_layers"] = 0
+    except Exception:  # pragma: no cover
+        pass
+
+    # top_p range
+    try:
+        top_p = raw.get("llm", {}).get("primary", {}).get("top_p")
+        if top_p is not None and not (0 < top_p <= 1):
+            errors.append(
+                (
+                    "llm.primary.top_p",
+                    "config-out-of-range",
+                    "top_p must be 0<..<=1",
+                )
+            )
+    except Exception:  # pragma: no cover
+        pass
+
+    # max_output_tokens positive
+    try:
+        mot = raw.get("llm", {}).get("primary", {}).get("max_output_tokens")
+        if mot is not None and mot <= 0:
+            errors.append(
+                (
+                    "llm.primary.max_output_tokens",
+                    "config-out-of-range",
+                    ">0 required",
+                )
+            )
+    except Exception:  # pragma: no cover
+        pass
+
+    if errors:
+        for path, code, _ in errors:
+            try:
+                metrics.inc(
+                    "config_validation_errors_total",
+                    {"path": path, "code": code},
+                )
+            except Exception:  # pragma: no cover
+                pass
+        # Validate error codes exist
+        for _, code, _ in errors:
+            validate_error_type(code)
+        # Aggregate message
+        details = ", ".join(f"{p}:{c}:{m}" for p, c, m in errors)
+        raise ConfigError(f"config validation failed: {details}")
 
 
 @lru_cache(maxsize=1)
@@ -189,6 +267,7 @@ def get_config() -> AggregatedConfig:  # noqa: D401
         merged = _merge_dict(base_cfg, overrides_cfg)
         _apply_env(merged)
         migrated = _migrate_legacy(merged)
+        _normalize_and_validate(migrated)
         # Validate sub-schemas before building aggregator
         validated_sub = _validate_sub_schemas(migrated)
         try:

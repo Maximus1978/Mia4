@@ -8,6 +8,11 @@ Provides:
 Specification: see docs/ТЗ/Config-Registry.md
 """
 
-from .loader import get_config, as_dict, ConfigError  # noqa: F401
+from .loader import (  # noqa: F401
+    get_config,
+    as_dict,
+    ConfigError,
+    clear_config_cache,
+)
 
-__all__ = ["get_config", "as_dict", "ConfigError"]
+__all__ = ["get_config", "as_dict", "ConfigError", "clear_config_cache"]

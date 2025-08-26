@@ -20,6 +20,9 @@ _ALLOWED_ERROR_TYPES = {
     "stream-broken",
     # infra
     "event-handler-error",
+    # config
+    "config-out-of-range",
+    "config-invalid",
 }
 
 
