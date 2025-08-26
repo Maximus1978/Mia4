@@ -1,0 +1,6 @@
+PyYAML>=6.0
+# Upgraded to pydantic v2 (code uses field_validator)
+pydantic>=2.7,<3
+pytest>=8.0
+# llama-cpp runtime (optional, can be skipped in CI via env MIA_LLAMA_FAKE=1)
+llama-cpp-python>=0.3.2,<0.4.0

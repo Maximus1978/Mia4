@@ -33,12 +33,12 @@ OUT_PATH = pathlib.Path("reports/perf_probe.json")
 
 
 def _capture_generation_tokens(func) -> Dict[str, Any]:
-    """Utility: run callable then return last GenerationFinished payload."""
+    """Utility: run callable then return last GenerationCompleted payload."""
     last: Dict[str, Any] | None = None
 
     def handler(name: str, payload: Dict[str, Any]):  # noqa: D401
         nonlocal last
-        if name == "GenerationFinished":
+        if name == "GenerationCompleted":
             last = payload
 
     unsub = subscribe(handler)

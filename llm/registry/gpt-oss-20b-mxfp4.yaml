@@ -1,0 +1,9 @@
+id: gpt-oss-20b-mxfp4
+family: gpt-oss
+role: primary
+path: models/gpt-oss-20b-GGUF/gpt-oss-20b-MXFP4.gguf
+quant: mxfp4
+context_length: 32768
+capabilities: [chat, judge, plan, long_context]
+checksum_sha256: 65d06d31a3977d553cb3af137b5c26b5f1e9297a6aaa29ae7caa98788cde53ab
+revision: r1

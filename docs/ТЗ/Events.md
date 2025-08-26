@@ -1,0 +1,105 @@
+# Events
+
+Список внутренних событий (канонический контракт). Поля сериализуются в structured log + внутреннюю шину.
+
+| EventName | Required Fields | Optional Fields | Emitter | Consumers | Notes | Version |
+|-----------|-----------------|-----------------|---------|-----------|-------|---------|
+| ModelLoaded | model_id, role, load_ms, revision | reasoning_modes | ModelRegistry | Metrics, Orchestrator | После успешной загрузки модели | 1 |
+| ModelUnloaded | model_id, role, reason | idle_seconds | ModelRegistry | Metrics | Выгрузка по idle или ручная | 1 |
+| ModelLoadFailed | model_id, role, error_type | message, retry_in_ms | ModelRegistry | Alerting, Orchestrator | Ошибка чтения / checksum / init | 1 |
+| GenerationStarted | request_id, model_id, role, prompt_tokens | parent_request_id | LLMProvider | Metrics, Tracing | Начало генерации | 1 |
+| GenerationChunk | request_id, model_id, role, seq, text, tokens_out | correlation_id | LLMProvider | StreamingConsumers | Стриминговый кусок вывода | 2 |
+| GenerationCompleted | request_id, model_id, role, status, output_tokens, latency_ms | stop_reason, error_type, message, correlation_id, result_summary | LLMProvider | Metrics, Memory | Терминальное событие (объединяет success/error) | 2 |
+| ChecksumMismatch | model_id, expected, actual | path | ModelRegistry | Alerting | Блокирующая ошибка | 1 |
+| JudgeInvocation | request_id, model_id, target_request_id | agreement | Eval | Metrics | Вызов судьи (MoE) | 1 |
+| PlanGenerated | request_id, steps_count | model_id | Planner | AgentLoop | План задач | 1 |
+| ReasoningPresetApplied | request_id, mode | temperature, top_p | Orchestrator | Metrics | Применён пресет reasoning (до генерации) | 1 |
+| Session.Created | session_id, workspace_id | title | SessionService | UI, Memory | Создана новая сессия | 1 |
+| Session.TitleUpdated | session_id, title, auto | workspace_id | SessionService | UI | Обновлён заголовок | 1 |
+| Message.Appended | message_id, session_id, workspace_id, role | token_counts | SessionService | Memory, RAG | Сообщение добавлено | 1 |
+| Attachment.Stored | attachment_id, session_id, workspace_id, mime, size | hash | AttachmentService | IngestWorker | Файл сохранён | 1 |
+| Ingest.Requested | attachment_id, embed_model | workspace_id | AttachmentService | IngestWorker | Индексация запрошена | 1 |
+| RAG.ResultsReady | request_id, items[], latency_ms | top_k | RAG | Orchestrator | Результаты retrieval | 1 |
+| WakeWord.Detected | ts, confidence, phrase | device_id | SensorService | AgentLoop | Активация голосом | 1 |
+| Tone.Classified | message_id, tone_label, confidence | model_id | EmotionAnalyzer | PreferenceEngine | Классификация тона | 1 |
+| Preference.Updated | user_id, changed_fields[] | traits_delta | PreferenceEngine | UI | Обновлены предпочтения | 1 |
+| Reflection.RunStarted | run_id, started_ts | trigger | ReflectionScheduler | Metrics | Начало рефлексии | 1 |
+| Reflection.RunFinished | run_id, duration_ms, insights_count | trigger | ReflectionScheduler | Memory, Metrics | Завершение рефлексии | 1 |
+| Recommendation.Generated | session_id, rec_type, target_ids[] | score | Recommender | UI | Рекомендация готова | 1 |
+| Permission.Requested | scope, requested_ts | reason | ToolAccess | UI | Запрос прав | 1 |
+| Permission.Granted | scope, granted_ts | ttl_sec, constraints | ToolAccess | All | Выдан доступ | 1 |
+| Agent.TriggerFired | trigger_id, action | correlation_id | AgentLoop | Orchestrator | Сработал триггер | 1 |
+| Speech.Requested | request_id, text_len, voice_id | correlation_id | SpeechService | Metrics | Запрошен синтез | 1 |
+| Speech.Synthesized | request_id, duration_ms, audio_ms, voice_id | cache_hit | SpeechService | UI, Metrics | Аудио готово | 1 |
+| Media.Generated | media_id, media_type, model_id, latency_ms | resolution, duration_ms | MediaService | UI | Медиа готово | 1 |
+| Camera.FrameCaptured | media_id, resolution | device_id | SensorService | MediaService | Кадр камеры | 1 |
+| Camera.ClipCaptured | media_id, duration_ms, resolution | device_id | SensorService | MediaService | Видеоклип камеры | 1 |
+
+Правила:
+
+1. `request_id` глобально уникален.
+2. События Generation* не эмитятся для zero-shot embed операций.
+3. При ошибке загрузки ретрай по экспоненциальной схеме вне этого контракта.
+4. JudgeInvocation и PlanGenerated могут следовать за GenerationCompleted для тех же моделей (разделение обязанностей уровня orchestration).
+5. ReasoningPresetApplied фиксирует выбор профиля до генерации.
+
+## Пример лог-записи ReasoningPresetApplied
+
+```json
+{
+	"event": "ReasoningPresetApplied",
+	"request_id": "a1b2c3d4",
+	"mode": "medium",
+	"temperature": 0.7,
+	"top_p": 0.92,
+	"ts": 1734543453.123
+}
+```
+
+Использование: агрегация метрик частоты режимов и сравнение latency/tokens_s по режимам.
+
+## EventBus (Spec Draft)
+
+EventBus v1 (sync, in-process): напрямую вызывает обработчики.
+
+| Aspect | Правило |
+|--------|--------|
+| API | subscribe(event, handler), emit(event, payload) |
+| Payload Base Fields | event, ts |
+| Handler Failures | Перехватываются, логируются, не останавливают emit |
+| Ordering | Не гарантируется между разными событиями, внутри одного emit — последовательный вызов подписчиков |
+| Versioning | Таблица событий содержит столбец Version; изменение структуры → либо инкремент версии поля payload.v, либо новое событие |
+
+Переход на v2 (async) добавит очередь и лимиты (events.queue.max). Конфиг появится после принятия ADR-0002.
+
+## Payload Versioning
+
+- События фиксируются с версией в таблице.
+- Для эволюции без rename: добавляется поле `v` в payload (если нужно различать формы).
+- BREAKING изменения требуют нового имени или явного раздела миграций.
+
+## Error Handling Semantics
+
+- GenerationCompleted.status = ok|error заменяет пару GenerationFinished / GenerationFailed.
+- Ошибочные состояния всегда имеют класс ошибок (error_type) из фиксированного множества (ADR-0006).
+
+## Publish / Subscribe Mapping (Draft)
+
+| Module | Publishes | Subscribes |
+|--------|-----------|------------|
+| LLM | GenerationStarted, GenerationChunk, GenerationCompleted, ReasoningPresetApplied | (в будущем) RAG.ResultsReady |
+| ModelRegistry | ModelLoaded, ModelUnloaded, ModelLoadFailed, ChecksumMismatch | - |
+| PerfCollector (planned) | Performance.Degraded (future) | Generation*, Model* |
+| Observability (planned) | - | Все |
+| RAG (planned) | RAG.QueryRequested, RAG.ResultsReady, RAG.IndexRebuilt | Memory.ItemStored |
+| Memory (planned) | Memory.ItemStored, Memory.InsightMerged | - |
+| Evaluation (planned) | JudgeInvocation, Eval.* | GenerationCompleted |
+
+## GenerationResult
+
+См. ADR-0012 (GenerationResult Contract). Поле status и агрегированные usage/timings отражаются в `GenerationCompleted.result_summary`.
+
+## Deprecations
+
+- GenerationFinished (v1) и GenerationFailed (v1) помечены как deprecated и будут удалены после минимального grace периода. Используйте GenerationChunk / GenerationCompleted.
+

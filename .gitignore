@@ -47,3 +47,23 @@ artifacts/
 
 # Lock file
 requirements.lock
+
+# Local knowledge base / editor metadata
+.obsidian/
+
+# Binary installers / large local binaries
+*.exe
+*.msi
+
+# Build command helper scripts (local temp)
+build_*.cmd
+
+# Temporary probe scripts (optional keep if needed)
+_dll_probe.py
+_dll_fullprobe.py
+
+# CUDA installers or archives in root
+cuda_*.exe
+
+# Misc numbered scratch dirs
+12.*

@@ -1,18 +1,17 @@
-"""Configuration loading and validation.
+"""Configuration loading and validation (S1 modular refactor).
+
+Changes introduced in S1:
+- Split monolithic RootConfig into per-module schemas under `core.config.schemas.*`.
+- Added top-level `schema_version` (migration: legacy configs without it → set to 1 with warning).
+- Added `modules.enabled` list to declare which modules are active (future ModuleManager).
+- AggregatedConfig stores references to validated sub-schemas but is itself decoupled (type Any).
 
 Layer order (highest precedence last merge wins):
 1. base.yaml
 2. overrides.local.yaml (ignore if missing)
 3. ENV (prefix MIA__ using double underscore to denote nesting)
 
-Validation rules:
-- Unknown keys rejected by pydantic model structure (implicit)
-- Types validated via Pydantic models
-
-Usage:
-    from core.config.loader import get_config
-    cfg = get_config()
-    print(cfg.llm.primary.id)
+Unknown keys inside sub-schemas still rejected (validated separately after migration).
 """
 from __future__ import annotations
 
@@ -20,177 +19,75 @@ import os
 import pathlib
 import threading
 from functools import lru_cache
-from typing import Any, Dict
+from typing import Any, Dict, List, Type
 
 import yaml
-from pydantic import BaseModel, Field, field_validator, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict
+
+# Import sub-schemas (decoupled)
+from .schemas.llm import LLMConfig, PrimaryLLMConfig, LightweightLLMConfig, OptionalMoEConfig, OptionalMoETimeouts  # noqa: F401
+from .schemas.rag import RAGConfig  # noqa: F401
+from .schemas.perf import PerfConfig  # noqa: F401
+from .schemas.core import (
+    EmbeddingsConfig,
+    EmotionConfig,
+    ReflectionConfig,
+    StorageConfig,
+    SystemConfig,
+)
+from .schemas.observability import MetricsConfig, LoggingConfig
+
+
+class ModulesConfig(BaseModel):
+    enabled: List[str] = Field(default_factory=list)
+
+
+class AggregatedConfig(BaseModel):
+    schema_version: int = 1
+    modules: ModulesConfig = ModulesConfig()
+    # Sub-schemas (opaque to this layer → Any)
+    llm: Any | None = None
+    embeddings: Any | None = None
+    rag: Any | None = None
+    emotion: Any | None = None
+    reflection: Any | None = None
+    metrics: Any | None = None
+    logging: Any | None = None
+    storage: Any | None = None
+    system: Any | None = None
+    perf: Any | None = None  # optional while rolling out
+
+    model_config = ConfigDict(extra="forbid")
 
 DEFAULT_CONFIG_DIR = "configs"
 ENV_PREFIX = "MIA__"
 
 
-class PrimaryLLMConfig(BaseModel):
-    id: str
-    temperature: float = 0.7
-    top_p: float = 0.9
-    max_output_tokens: int = 1024
-    n_gpu_layers: str | int = "auto"
-    # CPU tuning placeholders (Step 10.2): threads and batch size
-    n_threads: int | None = None
-    n_batch: int | None = None
+LEGACY_MODULE_KEYS = [
+    "llm",
+    "embeddings",
+    "rag",
+    "emotion",
+    "reflection",
+    "metrics",
+    "logging",
+    "storage",
+    "system",
+    "perf",
+]
 
-    @field_validator("temperature")
-    @classmethod
-    def _temp_range(cls, v: float) -> float:  # noqa: D401
-        if not (0 <= v <= 2):
-            raise ValueError("temperature out of range 0..2")
-        return v
-
-
-class LightweightLLMConfig(BaseModel):
-    id: str
-    temperature: float = 0.4
-
-
-class OptionalMoETimeouts(BaseModel):
-    judge_ms: int = 4000
-    plan_ms: int = 6000
-
-
-class OptionalMoEConfig(BaseModel):
-    enabled: bool = False
-    id: str | None = None
-    load_mode: str = Field("on_demand", pattern="^(on_demand|eager)$")
-    idle_unload_seconds: int = 300
-    reasoning_default: str = Field("low", pattern="^(low|medium|high)$")
-    reasoning_overrides: Dict[str, str] = Field(default_factory=dict)
-    timeouts: OptionalMoETimeouts = OptionalMoETimeouts()
-
-
-class LLMConfig(BaseModel):
-    primary: PrimaryLLMConfig
-    lightweight: LightweightLLMConfig
-    optional_models: Dict[str, OptionalMoEConfig] = Field(default_factory=dict)
-    skip_checksum: bool = False
-    load_timeout_ms: int = 15000
-    # Reasoning presets: mode -> overrides for generation params
-    reasoning_presets: Dict[str, Dict[str, float | int]] = Field(
-        default_factory=lambda: {
-            "low": {"temperature": 0.6, "top_p": 0.9},
-            "medium": {"temperature": 0.7, "top_p": 0.92},
-            "high": {"temperature": 0.85, "top_p": 0.95},
-        }
-    )
-
-    model_config = ConfigDict(extra="forbid")
-
-
-class EmbeddingConfig(BaseModel):
-    id: str
-
-
-class EmbeddingsConfig(BaseModel):
-    main: EmbeddingConfig
-    fallback: EmbeddingConfig
-
-
-class RAGHybridConfig(BaseModel):
-    weight_semantic: float = 0.6
-    weight_bm25: float = 0.4
-
-
-class RAGNormalizeConfig(BaseModel):
-    min_score: float = 0.0
-    max_score: float = 1.0
-
-
-class RAGConfig(BaseModel):
-    collection_default: str = "memory"
-    top_k: int = 8
-    hybrid: RAGHybridConfig = RAGHybridConfig()
-    normalize: RAGNormalizeConfig = RAGNormalizeConfig()
-
-
-class EmotionFSMConfig(BaseModel):
-    hysteresis_ms: int = 2000
-
-
-class EmotionModelRef(BaseModel):
-    id: str
-
-
-class EmotionConfig(BaseModel):
-    model: EmotionModelRef
-    fsm: EmotionFSMConfig
-
-
-class ReflectionSchedule(BaseModel):
-    cron: str = "0 3 * * *"
-
-
-class ReflectionConfig(BaseModel):
-    enabled: bool = True
-    schedule: ReflectionSchedule = ReflectionSchedule()
-
-
-class MetricsExportConfig(BaseModel):
-    prometheus_port: int = 9090
-
-
-class MetricsConfig(BaseModel):
-    export: MetricsExportConfig = MetricsExportConfig()
-
-
-class LoggingConfig(BaseModel):
-    level: str = Field("info", pattern="^(debug|info|warn|error)$")
-    format: str = Field("json", pattern="^(json|text)$")
-
-
-class StoragePathsConfig(BaseModel):
-    models: str = "models"
-    cache: str = ".cache"
-    data: str = "data"
-
-
-class StorageConfig(BaseModel):
-    paths: StoragePathsConfig = StoragePathsConfig()
-
-
-class SystemConfig(BaseModel):
-    locale: str = "ru-RU"
-    timezone: str = "Europe/Moscow"
-
-
-class PerfThresholdsConfig(BaseModel):
-    # Допустимое относительное падение throughput (tokens/s)
-    # перед флагом регрессии
-    tps_regression_pct: float = 0.12  # MXFP4 baseline
-    # Допустимый относительный рост p95 decode latency (short)
-    p95_regression_pct: float = 0.18
-    # Жёсткий лимит отношения p95_long / p95_short (SLA)
-    p95_ratio_limit: float = 1.30
-    # Допустимый относительный рост отношения p95_long/short
-    # vs предыдущий отчёта
-    p95_ratio_regression_pct: float = 0.20
-
-
-class PerfConfig(BaseModel):
-    thresholds: PerfThresholdsConfig = PerfThresholdsConfig()
-
-
-class RootConfig(BaseModel):
-    llm: LLMConfig
-    embeddings: EmbeddingsConfig
-    rag: RAGConfig
-    emotion: EmotionConfig
-    reflection: ReflectionConfig
-    metrics: MetricsConfig
-    logging: LoggingConfig
-    storage: StorageConfig
-    system: SystemConfig
-    perf: PerfConfig | None = None  # optional while rolling out
-
-    model_config = ConfigDict(extra="forbid")
+SUB_SCHEMA_CLASSES: Dict[str, Type[BaseModel]] = {
+    "llm": LLMConfig,
+    "embeddings": EmbeddingsConfig,
+    "rag": RAGConfig,
+    "emotion": EmotionConfig,
+    "reflection": ReflectionConfig,
+    "metrics": MetricsConfig,
+    "logging": LoggingConfig,
+    "storage": StorageConfig,
+    "system": SystemConfig,
+    "perf": PerfConfig,
+}
 
 
 class ConfigError(Exception):
@@ -248,20 +145,60 @@ def _resolve_config_dir() -> pathlib.Path:
     return pathlib.Path(os.getenv("MIA_CONFIG_DIR", DEFAULT_CONFIG_DIR))
 
 
+def _migrate_legacy(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Apply in-place migrations for legacy configs (no schema_version).
+
+    Rules:
+    - If `schema_version` absent → set to 1 and emit warning.
+    - If `modules` absent → infer enabled list from present legacy module keys.
+    """
+    if "schema_version" not in data:
+        # Simple stdout warn (observability module not yet abstracted here)
+        print("[config-migration] schema_version missing → assuming 1")  # noqa: T201
+        data["schema_version"] = 1
+    if "modules" not in data:
+        enabled = [k for k in LEGACY_MODULE_KEYS if k in data]
+        data["modules"] = {"enabled": enabled}
+    else:
+        # ensure key exists
+        data.setdefault("modules", {}).setdefault("enabled", [])
+    return data
+
+
+def _validate_sub_schemas(raw: Dict[str, Any]) -> Dict[str, Any]:
+    """Validate each known module via its schema class.
+
+    Returns dict of validated objects to be attached to AggregatedConfig.
+    """
+    validated: Dict[str, Any] = {}
+    for name, cls in SUB_SCHEMA_CLASSES.items():
+        if name in raw:
+            try:
+                validated[name] = cls.model_validate(raw[name])
+            except Exception as e:  # noqa: BLE001
+                raise ConfigError(f"Validation failed for module '{name}': {e}") from e
+    return validated
+
+
 @lru_cache(maxsize=1)
-def get_config() -> RootConfig:  # noqa: D401
+def get_config() -> AggregatedConfig:  # noqa: D401
     with _lock:
         cfg_dir = _resolve_config_dir()
         base_cfg = _load_yaml_if_exists(cfg_dir / "base.yaml")
-        overrides_cfg = _load_yaml_if_exists(
-            cfg_dir / "overrides.local.yaml"
-        )
+        overrides_cfg = _load_yaml_if_exists(cfg_dir / "overrides.local.yaml")
         merged = _merge_dict(base_cfg, overrides_cfg)
         _apply_env(merged)
+        migrated = _migrate_legacy(merged)
+        # Validate sub-schemas before building aggregator
+        validated_sub = _validate_sub_schemas(migrated)
         try:
-            return RootConfig.model_validate(merged)
+            agg = AggregatedConfig.model_validate(migrated)
         except Exception as e:  # noqa: BLE001
             raise ConfigError(str(e)) from e
+        # Attach validated objects
+        for k, v in validated_sub.items():
+            setattr(agg, k, v)
+        return agg
 
 
 def clear_config_cache() -> None:
