@@ -23,6 +23,7 @@ Status: Accepted (2025-08-25)
 | reflection | pipeline-error | Reflection.* |
 | media.speech | tts-internal, tts-timeout, tts-cache-error | Speech.* |
 | media.gen | media-internal, media-timeout | Media.Generated (future error variant) |
+| config.validation | config-out-of-range, config-invalid | Нарушение правил валидации / нормализации конфигурации (loader) |
 
 Правило: код отражает техническую причину (не пользовательский текст). Дополнительная детализация помещается в поле `message` (не парсится логикой метрик).
 

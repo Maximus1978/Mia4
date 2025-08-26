@@ -102,6 +102,12 @@ reports/
 
 Используйте для анализа распределения режимов и корреляции скорости / качества.
 
+Дополнено (2025-08-26):
+
+- ENV override аудит → метрика `env_override_total{path}` + маскированный структурированный лог применённых ключей.
+- Валидация конфигурации → нормализация `n_gpu_layers` (отрицательные → 0), проверки диапазонов (`top_p` 0<..<=1, `max_output_tokens>0`). Ошибки инкрементируют `config_validation_errors_total{path,code}` и используют error types `config-out-of-range`, `config-invalid` (ADR-0006).
+- Порог EventBus overhead формализован: ≤ 2% wall-clock генерации (Perf.md), подтверждение регрессии требует 3 повторов.
+
 ## Current Limitations
 
 - EventBus v1 синхронный: нет async / backpressure / replay (запланировано v2).
