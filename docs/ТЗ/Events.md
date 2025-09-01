@@ -7,9 +7,9 @@
 | ModelLoaded | model_id, role, load_ms, revision | reasoning_modes | ModelRegistry | Metrics, Orchestrator | После успешной загрузки модели | 1 |
 | ModelUnloaded | model_id, role, reason | idle_seconds | ModelRegistry | Metrics | Выгрузка по idle или ручная | 1 |
 | ModelLoadFailed | model_id, role, error_type | message, retry_in_ms | ModelRegistry | Alerting, Orchestrator | Ошибка чтения / checksum / init | 1 |
-| GenerationStarted | request_id, model_id, role, prompt_tokens | parent_request_id | LLMProvider | Metrics, Tracing | Начало генерации | 1 |
+| GenerationStarted | request_id, model_id, role, prompt_tokens | system_prompt_version, system_prompt_hash, persona_len, parent_request_id, correlation_id, sampling (incl. merged_sampling\, sampling_origin\, stop_sequences) | LLMProvider | Metrics, Tracing | Начало генерации (sampling включает применённые параметры + max_tokens + filtered_out; sampling_origin=passport\|preset\|user\|mixed) | 2 |
 | GenerationChunk | request_id, model_id, role, seq, text, tokens_out | correlation_id | LLMProvider | StreamingConsumers | Стриминговый кусок вывода | 2 |
-| GenerationCompleted | request_id, model_id, role, status, output_tokens, latency_ms | stop_reason, error_type, message, correlation_id, result_summary | LLMProvider | Metrics, Memory | Терминальное событие (объединяет success/error) | 2 |
+| GenerationCompleted | request_id, model_id, role, status, output_tokens, latency_ms | stop_reason, error_type, message, correlation_id, result_summary (incl. sampling_origin\, merged_sampling) | LLMProvider | Metrics, Memory | Терминальное событие; result_summary.sampling зеркалирует GenerationStarted.sampling; stop_reason=stub\|eos\|error\|stop_sequence | 2 |
 | ChecksumMismatch | model_id, expected, actual | path | ModelRegistry | Alerting | Блокирующая ошибка | 1 |
 | JudgeInvocation | request_id, model_id, target_request_id | agreement | Eval | Metrics | Вызов судьи (MoE) | 1 |
 | PlanGenerated | request_id, steps_count | model_id | Planner | AgentLoop | План задач | 1 |
@@ -42,6 +42,12 @@
 3. При ошибке загрузки ретрай по экспоненциальной схеме вне этого контракта.
 4. JudgeInvocation и PlanGenerated могут следовать за GenerationCompleted для тех же моделей (разделение обязанностей уровня orchestration).
 5. ReasoningPresetApplied фиксирует выбор профиля до генерации.
+
+Cross-links:
+
+- API SSE contract: `../API.md#post-generate-sse`
+- Config registry: `Config-Registry.md` (llm.postproc.*, llm.reasoning_presets.*, llm.stop)
+- ADR: ADR-0012 (GenerationResult), ADR-0015 (Model Fallback & Stub), ADR-0016 (Model Passports)
 
 ## Пример лог-записи ReasoningPresetApplied
 

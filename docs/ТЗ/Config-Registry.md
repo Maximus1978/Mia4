@@ -6,19 +6,41 @@
 |----------|------|---------|--------|-----------|-------|
 | schema_version | int | 1 | core | no | Версия агрегированной схемы (миграции) |
 | modules.enabled[] | list[string] | derived | core | yes | Активные модули (управляется ModuleManager) |
-| llm.primary.id | string | gpt-oss-20b-mxfp4 | llm | no | Primary baseline switched to MXFP4 (2025-08-24; prev q4km) |
+| llm.primary.id | string | gpt-oss-20b-mxfp4 | llm | no | Primary baseline (паспорт: [gpt-oss-20b-mxfp4](passports/gpt-oss-20b-mxfp4.md)) |
 | llm.primary.temperature | float | 0.7 | llm | yes | Диапазон 0–2 |
 | llm.primary.top_p | float | 0.9 | llm | yes | 0–1 |
+| llm.primary.top_k | int | 40 | llm | yes | >0 |
+| llm.primary.repeat_penalty | float | 1.1 | llm | yes | 0.5–2.5 |
+| llm.primary.min_p | float | 0.05 | llm | yes | 0–1 |
 | llm.primary.max_output_tokens | int | 1024 | llm | yes | Ограничение вывода |
 | llm.primary.n_gpu_layers | int | auto | llm | no | Авто распределение на GPU |
 | llm.primary.n_threads | int? | null | llm | yes | Кол-во потоков CPU (None → llama.cpp default) |
 | llm.primary.n_batch | int? | null | llm | yes | Batch size для context / eval (None → llama.cpp default) |
-| llm.lightweight.id | string | phi-3.5-mini-instruct-q4_0 | llm | no | Быстрый режим |
+| llm.lightweight.id | string | phi-3.5-mini-instruct-q3_k_s | llm | no | Lightweight (паспорт: [phi-3.5-mini-instruct-q3_k_s](passports/phi-3.5-mini-instruct-q3_k_s.md)) |
 | llm.lightweight.temperature | float | 0.4 | llm | yes | |
-| llm.optional_models.* | map | — | llm | yes | В текущей версии пусто (gpt-oss перенесён в primary) |
+| llm.system_prompt.version | int | 1 | llm | no | Версия базового системного промпта |
+| llm.system_prompt.allow_user_override | bool | false | llm | yes | Разрешить полную замену base prompt пользователем |
+| llm.system_prompt.max_persona_chars | int | 1200 | llm | yes | Лимит длины persona слоя |
+| llm.system_prompt.text | string | (short) | llm | no | Базовый системный промпт (Layer 1) |
+| llm.optional_models.* | map | — | llm | yes | Доп. модели (judge alias, experimental) |
+| llm.heavy_model_vram_threshold_gb | float | 10.0 | llm | yes | Порог размера (GiB) для auto-unload heavy |
+| llm.generation_timeout_s | int | 120 | llm | no | Ограничение времени генерации (stream hard stop) |
+| llm.fake | bool | false | llm | yes | Использовать DummyProvider для gguf (dev/tests) |
 | llm.skip_checksum | bool | false | llm | no | Для dev среды |
+| llm.stop[] | list[string] | [] | llm | yes | Stop sequences (обрезка вывода, stop_reason=stop_sequence) |
 | llm.load_timeout_ms | int | 15000 | llm | no | Ожидание загрузки файла |
-| llm.reasoning_presets.* | map | {low:{temperature:0.6,top_p:0.9}, medium:{...}} | llm | yes | Переопределения параметров генерации по режиму |
+| llm.reasoning_presets.* | map | {low:{temperature:0.6,top_p:0.9,reasoning_max_tokens:128}, ...} | llm | yes | Переопределения параметров + per-mode `reasoning_max_tokens` (low=128, medium=256, high=512) |
+| llm.postproc.enabled | bool | true | llm | yes | Включить постпроцессинг (split reasoning/final) |
+| llm.postproc.reasoning.final_marker | string | ===FINAL=== | llm | yes | Маркер разделения reasoning и финального ответа |
+| llm.postproc.reasoning.max_tokens | int | 256 | llm | yes | Лимит reasoning токенов (обрезка + маркер) |
+| llm.postproc.reasoning.drop_from_history | bool | true | llm | yes | Не сохранять reasoning в session history |
+| llm.postproc.reasoning.ratio_alert_threshold | float | 0.45 | llm | yes | Порог доли reasoning к финальному ответу (alert metric) |
+| llm.postproc.ngram.n | int | 3 | llm | yes | N для подавления мгновенных повторов |
+| llm.postproc.ngram.window | int | 128 | llm | yes | Окно токенов для n-gram буфера |
+| llm.postproc.collapse.whitespace | bool | true | llm | yes | Схлопывать повторяющиеся пробелы/переносы |
+| llm.prompt.harmony.enabled | bool | false | llm | yes | Feature flag тегового (`<analysis>`/`<final>`) разделения |
+| llm.prompt.harmony.tags.analysis | string | analysis | llm | no | Тег начала reasoning канала |
+| llm.prompt.harmony.tags.final | string | final | llm | no | Тег начала финального ответа |
 | embeddings.main.id | string | bge-m3 | embeddings | no | |
 | embeddings.fallback.id | string | gte-small | embeddings | no | |
 | rag.collection_default | string | memory | rag | no | DEFAULT_COLLECTION |
@@ -71,6 +93,12 @@
 | observability.tracing.enabled | bool | false | observability | yes | Корреляция/трейс контекст |
 
 Автоген снапшот схем: см. [`Generated-Config.md`](Generated-Config.md) (обновляется скриптом `scripts/generate_config_docs.py`, тест `test_generated_config_docs_up_to_date`). Manual registry (этот файл) остаётся источником более богатых пояснений.
+
+Harmony vs Marker (Stage 1 – buffering):
+
+- При `llm.prompt.harmony.enabled=true` постпроцессор сначала собирает весь вывод, парсит теги `<analysis>/<final>`, затем стримит только финальный сегмент. Маркер `===FINAL===` остаётся в системном промпте для совместимости; если теги отсутствуют, применяется прежняя логика маркера.
+- `llm.postproc.reasoning.drop_from_history` на текущем этапе *гарантированно скрывает* reasoning_text в marker режиме; в Harmony режиме политика скрытия финализируется позже (reasoning может присутствовать в финальном событии — клиентская сторона не должна его записывать в историю).
+- План Stage 2: инкрементальный парсинг Harmony без полного буфера + отдельный SSE канал `analysis`; затем удаление маркера из системного промпта после достижения стабильности.
 
 S1 Migration:
 
