@@ -2,6 +2,15 @@
 
 Endpoints
 
+Cross-links:
+
+- Events contract: `ТЗ/Events.md`
+- Config registry (sampling, postproc keys): `ТЗ/Config-Registry.md`
+- Model passports details: `ТЗ/passports/`
+- Postprocessing ADR: `ADR/ADR-0014-Postprocessing-Reasoning-Split.md`
+- Sampling merge ADR: `ADR/ADR-0016-Model-Passports-and-Sampling-Merge.md`
+- Prompt layering draft: `ADR/ADR-0018-Prompt-Layering-and-Obsidian-Persona.md`
+
 ## GET /health
 
 Response: `{ "status": "ok" }`

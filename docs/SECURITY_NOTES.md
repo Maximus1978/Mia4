@@ -2,6 +2,15 @@
 
 Минимальный baseline угроз и контролей. Документ расширяется перед добавлением внешних источников данных.
 
+Cross-links:
+
+- Error taxonomy & safe logging: `ADR/ADR-0006-Error-Taxonomy.md`
+- Event payload base (for security events extension): `ADR/ADR-0003-Event-Payload-Base.md`
+- Config registry (keys: permissions.allowed_roots, llm.skip_checksum): `ТЗ/Config-Registry.md`
+- Model checksum / fallback logic: `ADR/ADR-0015-Model-Fallback-and-Stub-Loading.md`
+- Sandbox & permissions design: `ADR/ADR-0008-Permissions-and-Sandbox.md`
+- Future path sandbox enforcement tracking: `ТЗ/Observability.md` (metrics) & Backlog in `.instructions.md`
+
 ## Assets
 
 | Asset | Описание | Защита сейчас |
