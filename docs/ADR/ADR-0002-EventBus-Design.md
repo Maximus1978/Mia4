@@ -48,5 +48,5 @@ class EventBus:
 
 ## Связанные документы
 
-- Events.md
-- ARCHITECTURE_GUARDS.md
+- [[Events]]
+-  [[ARCHITECTURE_GUARDS]]

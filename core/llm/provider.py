@@ -1,5 +1,7 @@
-"""ModelProvider interface definition and a DummyProvider for tests.
+"""ModelProvider interface (no built-in dummy implementation).
 
+All providers must implement the full contract; test suites now use real
+lightweight model manifests (phi-mini, etc.) instead of a dummy stub.
 Adapters must not allocate heavy resources on import; call load() explicitly.
 """
 from __future__ import annotations
@@ -8,6 +10,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Iterable, Dict, Any
 from .types import GenerationResult
+# No direct event imports needed at interface level.
 
 
 @dataclass(frozen=True)
@@ -40,46 +43,5 @@ class ModelProvider(ABC):
     def unload(self) -> None:  # optional hook
         """Release resources (default no-op)."""
         return None
-
-
-class DummyProvider(ModelProvider):
-    """Minimal echo provider used for wiring & tests."""
-
-    def __init__(self, model_id: str = "dummy", role: str = "primary") -> None:
-        self._loaded = False
-        self._info = ModelInfo(
-            id=model_id,
-            role=role,
-            capabilities=("chat",),
-            context_length=128,
-            revision=None,
-            metadata={"provider": "dummy"},
-        )
-
-    def load(self) -> None:  # noqa: D401
-        self._loaded = True
-
-    def generate(
-        self, prompt: str, **kwargs: Any
-    ) -> GenerationResult:  # noqa: D401
-        if not self._loaded:
-            self.load()
-        limit = int(kwargs.get("max_output_chars", 256))
-        text = ("ECHO: " + prompt)[:limit]
-        return GenerationResult.ok(
-            text=text,
-            prompt_tokens=len(prompt.split()),
-            completion_tokens=len(text.split()),
-            total_ms=0,
-            model_id=self._info.id,
-            role=self._info.role,
-            request_id="dummy",
-        )
-
-    def stream(self, prompt: str, **kwargs: Any):  # noqa: D401
-        res = self.generate(prompt, **kwargs)
-        for part in res.text.split():
-            yield part + " "
-
-    def info(self) -> ModelInfo:  # noqa: D401
-        return self._info
+    
+    # No dummy implementation.

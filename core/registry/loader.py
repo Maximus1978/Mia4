@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Dict
 
 import yaml
+from yaml import YAMLError
 
 from core.llm import ModelLoadError
 from .manifest import ModelManifest
@@ -22,8 +23,30 @@ def _iter_manifest_files(registry_dir: Path):
 
 
 def _load_manifest_file(path: Path) -> ModelManifest:
-    with path.open("r", encoding="utf-8") as f:
-        data = yaml.safe_load(f) or {}
+    """Load a single manifest file with a small robustness tweak.
+
+    If YAML contains tab characters (common accidental edit on Windows), we
+    re-try after replacing tabs with two spaces so that a single bad manifest
+    does not crash the entire /models endpoint or generation flow.
+    """
+    raw_text = path.read_text(encoding="utf-8")
+    try:
+        data = yaml.safe_load(raw_text) or {}
+    except YAMLError as e:  # pragma: no cover - defensive branch
+        if "\t" in raw_text:
+            # Tabs present: attempt tolerant parse
+            safe_text = raw_text.replace("\t", "  ")
+            try:
+                print(
+                    f"[WARN] Re-parsing manifest tabs->spaces: {path.name}"
+                )
+                data = yaml.safe_load(safe_text) or {}
+            except Exception as e2:  # noqa: BLE001
+                raise ModelLoadError(
+                    f"Invalid manifest {path.name}: {e2}"
+                ) from e2
+        else:
+            raise ModelLoadError(f"Invalid manifest {path.name}: {e}") from e
     try:
         return ModelManifest(**data)
     except Exception as e:  # noqa: BLE001

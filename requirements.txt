@@ -4,3 +4,6 @@ pydantic>=2.7,<3
 pytest>=8.0
 # llama-cpp runtime (optional, can be skipped in CI via env MIA_LLAMA_FAKE=1)
 llama-cpp-python>=0.3.2,<0.4.0
+fastapi>=0.111.0,<0.112
+uvicorn>=0.30.0,<0.31
+huggingface_hub>=0.23.0,<0.24

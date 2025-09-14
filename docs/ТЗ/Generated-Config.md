@@ -7,11 +7,20 @@
 | Field | Type | Default | Notes |
 |-------|------|---------|-------|
 | primary | PrimaryLLMConfig | PydanticUndefined |  |
-| lightweight | LightweightLLMConfig | PydanticUndefined |  |
+| lightweight | core.config.schemas.llm.LightweightLLMConfig | None | PydanticUndefined |  |
 | optional_models | Dict | PydanticUndefined |  |
+| heavy_model_vram_threshold_gb | float | 10.0 |  |
 | skip_checksum | bool | False |  |
 | load_timeout_ms | int | 15000 |  |
+| generation_timeout_s | int | 120 |  |
 | reasoning_presets | Dict | PydanticUndefined |  |
+| system_prompt | Dict | PydanticUndefined |  |
+| postproc | Dict | PydanticUndefined |  |
+| prompt | Dict | PydanticUndefined |  |
+| commentary_retention | Dict | PydanticUndefined |  |
+| tool_calling | Dict | PydanticUndefined |  |
+| stop | list | PydanticUndefined |  |
+| fake | bool | False |  |
 
 ## LightweightLLMConfig (llm)
 
@@ -46,6 +55,9 @@
 | id | str | PydanticUndefined |  |
 | temperature | float | 0.7 |  |
 | top_p | float | 0.9 |  |
+| top_k | int | 40 |  |
+| repeat_penalty | float | 1.1 |  |
+| min_p | float | 0.05 |  |
 | max_output_tokens | int | 1024 |  |
 | n_gpu_layers | str | int | auto |  |
 | n_threads | int | None | (required) |  |
@@ -99,15 +111,15 @@
 
 | Field | Type | Default | Notes |
 |-------|------|---------|-------|
-| main | EmbeddingConfig | PydanticUndefined |  |
-| fallback | EmbeddingConfig | PydanticUndefined |  |
+| main | EmbeddingConfig | id='bge-m3' |  |
+| fallback | EmbeddingConfig | id='gte-small' |  |
 
 ## EmotionConfig (core)
 
 | Field | Type | Default | Notes |
 |-------|------|---------|-------|
-| model | EmotionModelRef | PydanticUndefined |  |
-| fsm | EmotionFSMConfig | PydanticUndefined |  |
+| model | EmotionModelRef | id='distilroberta-multilingual-emotion' |  |
+| fsm | EmotionFSMConfig | hysteresis_ms=2000 |  |
 
 ## EmotionFSMConfig (core)
 

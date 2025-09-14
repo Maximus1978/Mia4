@@ -24,6 +24,24 @@ pip install -r requirements.txt
 pytest -q
 ```
 
+## Testing
+
+Запуск тестов должен происходить в активированном виртуальном окружении. Для автоматизации добавлен батник `scripts/ensure_venv.bat`:
+
+```powershell
+scripts\ensure_venv.bat
+pytest -q
+```
+
+Поведение батника:
+
+1. Создаёт `.venv` если его нет.
+2. Активирует окружение.
+3. Устанавливает зависимости из `requirements.lock` (если есть) иначе `requirements.txt`.
+
+
+Рекомендуется запускать локально и в CI перед любым `pytest`.
+
 ## Конфигурация
 
 Слои:
@@ -50,14 +68,37 @@ pytest -q
 
 `generate_result()` возвращает: `text`, `usage.prompt_tokens`, `usage.completion_tokens`, `timings.total_ms`, `timings.decode_tps`. Используется для перф и наблюдаемости; строковый `generate()` оставлен для обратной совместимости.
 
+## Разделение Reasoning / Final (Harmony)
+
+Система перешла на единый формат Harmony: модель генерирует структурированные каналы (`analysis`, `final`). Потоковый адаптер (`HarmonyChannelAdapter`) инкрементально парсит спец‑токены `<|start|>assistant<|channel|>analysis|final<|message|>...<|end|>` и:
+
+- Стримит токены `analysis` как SSE события `analysis` (не сохраняются в истории).
+- Стримит финальные токены как события `token` (агрегируются клиентом в ответ).
+- Вычисляет `reasoning_tokens`, `final_tokens`, `reasoning_ratio` без текстового маркера.
+- При отсутствии Harmony спец‑токенов (несовместимый провайдер) весь вывод трактуется как `final` (reasoning=0) — без legacy fallback.
+
+Legacy marker (`===FINAL===`) полностью удалён из кода, конфигов и тестов.
+
 ## Capability Routing
 
 Манифесты моделей содержат `capabilities: ["chat", "judge", ...]`. Вызов через LLMModule: `get_provider_by_capabilities(["judge"])` выбирает подходящую модель, либо fallback на primary.
 
 ## Модели
 
-Спецификация и манифесты описаны в `docs/ТЗ/Модели ИИ.md` и `docs/ТЗ/Config-Registry.md`.
+Спецификация и манифесты описаны в `docs/ТЗ/Модели ИИ.md` и `docs/ТЗ/Config-Registry.md` (см. паспорта: [gpt-oss-20b-mxfp4](docs/ТЗ/passports/gpt-oss-20b-mxfp4.md), [phi-3.5-mini-instruct-q3_k_s](docs/ТЗ/passports/phi-3.5-mini-instruct-q3_k_s.md)).
 Текущий спринт: реализация интерфейса провайдера, реестра манифестов и адаптера llama.cpp.
+
+### Загрузка lightweight модели (phi)
+
+Актуальный легковесный quant: `phi-3.5-mini-instruct-q3_k_s` (смена с `q4_0` 2025-08-26: прежний файл давал ошибку `invalid vector subscript`, подозрение на повреждённый GGUF).
+
+Пример скачивания (скрипт ещё ссылается на старый id — будет обновлён в следующем спринте):
+
+```powershell
+python scripts/fetch_phi.py --model phi-3.5-mini-instruct-q3_k_s --repo microsoft/Phi-3.5-mini-instruct --filename Phi-3.5-mini-instruct_Uncensored-Q3_K_S.gguf
+```
+
+После выполнения файл появится в `models/` и манифест `llm/registry/phi-3.5-mini-instruct-q3_k_s.yaml` должен иметь совпадающий `checksum_sha256` (проверка выполняется при первой загрузке).
 
 ## Development
 

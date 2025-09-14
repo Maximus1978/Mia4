@@ -15,6 +15,7 @@ Status: Accepted (2025-08-25)
   "text": "...",
   "usage": {"prompt_tokens": int, "completion_tokens": int},
   "timings": {"total_ms": int, "decode_tps": float},
+  "sampling": {"temperature": float, "top_p": float, "top_k": int, "repeat_penalty": float, "min_p": float, "max_tokens": int, "filtered_out": ["param"...]?}?,
   "error": {"type": "error_type", "message": "..."}?  
 }
 ```
@@ -24,13 +25,14 @@ Status: Accepted (2025-08-25)
 1. `status=error` → поле `error` обязательно; `text` может быть частично (обрезано) или пустым.
 2. `decode_tps = completion_tokens / decode_phase_ms * 1000` (decode_phase_ms ⊆ total_ms).
 3. Поля usage вычисляются до тримминга безопасности (безопасность может скорректировать `text`).
-4. Новые метрики добавляются только через MINOR bump version → payload.version=3.
+4. Поле `sampling` опционально: присутствует когда провайдер предоставляет параметры; `filtered_out` показывает отброшенные неподдерживаемые параметры.
+5. Новые метрики / разделы добавляются только через MINOR bump version → payload.version=3.
 
 ## Mapping к событиям (v2)
 
 - GenerationStarted: фиксирует начало (prompt_tokens, correlation_id).
 - GenerationChunk: нулевой или более раз (seq монотонен, tokens_out кумулятивен).
-- GenerationCompleted: одиночное терминальное; содержит status ok|error, агрегаты (output_tokens, latency_ms) и `result_summary` (вложенная структура с usage/timings/error).
+- GenerationCompleted: одиночное терминальное; содержит status ok|error, агрегаты (output_tokens, latency_ms) и `result_summary` (вложенная структура с usage/timings/error/sampling).
 
 Deprecated: GenerationFinished / GenerationFailed (v1) заменены на GenerationCompleted.
 

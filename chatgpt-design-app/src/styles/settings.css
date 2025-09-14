@@ -1,0 +1,21 @@
+.settings-popover-overlay { position: fixed; inset:0; background: rgba(0,0,0,0.35); display:flex; align-items:center; justify-content:center; z-index:1000; }
+.settings-popover { background:#1e1f24; color:#fff; width:520px; max-height:80vh; overflow:auto; border-radius:8px; padding:20px; box-shadow:0 6px 24px rgba(0,0,0,0.4); font-family: system-ui, sans-serif; }
+.settings-popover header { display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; }
+.settings-popover h3 { margin:0; font-size:18px; }
+.settings-popover h4 { margin:16px 0 8px; font-size:14px; text-transform:uppercase; letter-spacing:0.5px; opacity:0.85; }
+.settings-popover .form-row { display:flex; align-items:center; gap:8px; margin-bottom:12px; }
+.settings-popover label { width:120px; font-size:13px; opacity:0.9; }
+.settings-popover input[type=range] { flex:1; }
+.settings-popover input.numeric { width:90px; background:#2a2c33; color:#fff; border:1px solid #3a3d46; border-radius:4px; padding:4px 6px; }
+.settings-popover textarea { flex:1; min-height:100px; resize:vertical; background:#2a2c33; color:#fff; border:1px solid #3a3d46; border-radius:4px; padding:6px 8px; font-family:inherit; }
+.settings-popover .persona { align-items:flex-start; }
+.settings-popover .char-counter { font-size:11px; opacity:0.6; align-self:flex-end; margin-left:4px; }
+.settings-popover footer { display:flex; justify-content:flex-end; gap:8px; margin-top:8px; }
+.settings-popover button { background:#2f3138; color:#fff; border:1px solid #464a55; border-radius:4px; padding:6px 14px; cursor:pointer; font-size:13px; }
+.settings-popover button.primary { background:#4a6cff; border-color:#4a6cff; }
+.settings-popover button.secondary { background:transparent; }
+.settings-popover button:hover { filter:brightness(1.1); }
+.settings-popover .badge { background:#454b57; padding:2px 6px; border-radius:12px; font-size:11px; text-transform:uppercase; letter-spacing:0.5px; }
+.settings-popover .badge.deterministic { background:#2d6a4f; }
+.settings-icon { background:none; border:none; color:#ddd; font-size:13px; cursor:pointer; margin:8px 0; padding:4px 6px; display:flex; align-items:center; gap:4px; }
+.settings-icon:hover { color:#fff; }

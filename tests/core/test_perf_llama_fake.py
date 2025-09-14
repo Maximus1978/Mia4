@@ -1,7 +1,7 @@
-import os
 import time
 from pathlib import Path
 import textwrap
+import pytest
 
 from core.llm.factory import get_model, clear_provider_cache
 from core.registry.loader import clear_manifest_cache, compute_sha256
@@ -34,8 +34,8 @@ def _make_manifest(tmp_path: Path, fname: str) -> None:
     manifest_file.write_text(manifest_text, encoding="utf-8")
 
 
+@pytest.mark.skip("Removed fake mode performance path")
 def test_perf_fake_generation_tokens_per_sec(tmp_path: Path):
-    os.environ["MIA_LLAMA_FAKE"] = "1"
     reset_listeners_for_tests()
     _make_manifest(tmp_path, "primary.gguf")
     clear_manifest_cache()

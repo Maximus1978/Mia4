@@ -1,0 +1,97 @@
+/* theme.css */
+
+:root {
+    --accent-color: #532D8D; /* Example accent color */
+    --background-color: #212121; /* Dark background */
+    --panel-background: #181818; /* Left panel background */
+    --text-color: #ffffff; /* Default text color */
+    --ai-response-bg: #212121; /* Background for AI responses */
+    --user-message-bg: #532D8D; /* Background for user messages */
+    --button-bg: #007BFF; /* Button background color */
+    --button-hover-bg: #0056b3; /* Button hover background color */
+}
+
+body {
+    background-color: var(--background-color);
+    color: var(--text-color);
+    font-family: Arial, sans-serif;
+}
+
+.left-panel {
+    background-color: var(--panel-background);
+    width: 250px;
+    transition: width 0.3s;
+}
+
+.left-panel.collapsed {
+    width: 60px;
+}
+
+.chat-window {
+    padding: 20px;
+    flex-grow: 1;
+}
+
+.user-message {
+    background-color: var(--user-message-bg);
+    border-radius: 20px;
+    padding: 10px;
+    margin: 5px 0 5px 200px;
+	align-items: flex-end;
+	position: relative;
+    color: var(--text-color);
+	border-left: 0px;
+	font-size: 16px;
+}
+
+.ai-message {
+    background-color: var(--ai-response-bg);
+    border-radius: 8px;
+    padding: 10px;
+    margin: 5px 0;
+    color: var(--text-color);
+	line-height: 28px;
+}
+
+.feedback-buttons {
+    display: flex;
+    justify-content: left;
+    margin-top: 10px;
+}
+
+.feedback-button {
+    background-color: var(--button-bg);
+    color: white;
+    border: none;
+    border-radius: 5px;
+    padding: 5px 10px;
+    cursor: pointer;
+}
+
+.feedback-button:hover {
+    background-color: var(--button-hover-bg);
+}
+
+.input-bar {
+    display: flex;
+    align-items: center;
+    padding: 10px;
+    border-top: 1px solid #E0E0E0;
+}
+
+.input-bar input {
+    flex-grow: 1;
+    padding: 10px;
+    margin-right: 10px;
+	background:#2a2c33; 
+	color:#fff; 
+	border:1px solid #3a3d46; 
+	border-radius:4px; 
+	padding:20px 20px;
+	font-size: 16px;
+}
+
+.icon {
+    margin-right: 10px;
+    cursor: pointer;
+}

@@ -1,9 +1,9 @@
 id: phi-3.5-mini-judge
 family: phi
 role: judge
-path: models/phi-3.5-mini-instruct-q4_0.gguf
-quant: q4_0
+path: models/Phi-3.5-mini/Phi-3.5-mini-instruct_Uncensored-Q3_K_S.gguf  # reuse lightweight Q3_K_S until dedicated judge tuned
+quant: q3_k_s
 context_length: 8192
 capabilities: [judge]
-checksum_sha256: "0000000000000000000000000000000000000000000000000000000000000000"  # placeholder (skip_checksum true for dev)
+checksum_sha256: "480fce5d3387d1d713e3936f473b97a4de2518d3f8b1596306ffb57182af5c6c"  # same file as lightweight variant (temporary)
 revision: r1

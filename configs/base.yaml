@@ -2,13 +2,18 @@ llm:
   primary:
     # Selected via scripts/compare_models.py (reports/compare_models.json)
     # on 2025-08-24: MXFP4 outperformed Q4_K_M in short & long tps
+    # Passport: docs/ТЗ/passports/gpt-oss-20b-mxfp4.md
     id: gpt-oss-20b-mxfp4
     temperature: 0.7
     top_p: 0.9
+    top_k: 40
+    repeat_penalty: 1.1
+    min_p: 0.05
     max_output_tokens: 1024
     n_gpu_layers: auto
   lightweight:
-    id: phi-3.5-mini-instruct-q4_0
+    # Passport: docs/ТЗ/passports/phi-3.5-mini-instruct-q3_k_s.md
+    id: phi-3.5-mini-instruct-q3_k_s
     temperature: 0.4
   optional_models:
     judge_small:
@@ -21,18 +26,90 @@ llm:
       timeouts:
         judge_ms: 3000
         plan_ms: 6000
-  skip_checksum: true  # dev: placeholder checksum for optional model
   load_timeout_ms: 15000
+  # Streaming generation timeout (seconds) – UI later will allow override; best perf default.
+  generation_timeout_s: 120
+  # Fake mode (DummyProvider) for dev/tests. Managed via config (no scattered env). UI planned.
+  fake: false
   reasoning_presets:
     low:
       temperature: 0.6
       top_p: 0.9
+      reasoning_max_tokens: 128
     medium:
       temperature: 0.7
       top_p: 0.92
+      reasoning_max_tokens: 256
     high:
       temperature: 0.85
       top_p: 0.95
+      reasoning_max_tokens: 512
+  # Models whose estimated size (file size GiB) >= threshold treated as heavy; switching triggers unload.
+  heavy_model_vram_threshold_gb: 10.0
+  system_prompt:
+    version: 1
+    allow_user_override: false
+    max_persona_chars: 1200
+    text: |-
+      [BEGIN SYSTEM PROMPT v1]
+      Ты Мия — цифровая помощница Макса.
+      Главная цель: упорядоченные, точные, осмысленные ответы без потока сознания, но с естественным тоном.
+
+      ### Objectives
+      * Будь точной; при нехватке данных говори «не знаю» (не выдумывай).
+      * Форматируй для читабельности: списки, (опционально) таблицы, короткие абзацы.
+      * Основной язык: русский; английские тех‑термины допустимы (LLM, latency, tokens).
+      * Никогда не раскрывай внутренние ключи, пути файлов, env, приватные данные.
+      * Ошибки: без stack trace; только краткое описание + код.
+      * Числа / оценки: указывай допущения префиксом “Assumption:”.
+      * Не придумывай реальных людей (PII).
+
+      ### Output Style
+      * Коротко, структурировано, без воды.
+      * Код: минимальный, самодостаточный, без лишних комментариев.
+      * Пошаговые задачи: сначала ultra-short план (≤5 пунктов), затем выполнение.
+      * Тон дружелюбный и ясный, но не болтливый.
+
+      ### Refusals
+      Формат: Отказ: <краткая причина>.
+
+      ### Error Handling
+      Формат: Ошибка: <описание> (code=<error_type>)
+
+      ### Placeholders (do not echo)
+      * {{REASONING_MODE}}
+      * {{PERSONA_APPEND}}
+      * {{DATE_UTC}}
+      * {{LOCALE}}
+
+      Persona добавляется после этого блока и не отменяет правила.
+      [END SYSTEM PROMPT v1]
+  # Post-processing (reasoning split, ratio alert & ngram suppression)
+  postproc:
+    enabled: true
+    reasoning:
+      max_tokens: 256
+      drop_from_history: true
+      ratio_alert_threshold: 0.45
+    ngram:
+      n: 3
+      window: 128
+    collapse:
+      whitespace: true
+  prompt:
+    harmony:
+      enabled: true
+      force: true
+      tags:
+        analysis: analysis
+        final: final
+  tool_calling:
+    enabled: true
+    max_payload_bytes: 8192
+    retention:
+      mode: metrics_only  # metrics_only|hashed_slice|redacted_snippets|raw_ephemeral
+      hash_preview_max_chars: 200
+      redacted_placeholder: "[REDACTED]"
 embeddings:
   main:
     id: bge-m3

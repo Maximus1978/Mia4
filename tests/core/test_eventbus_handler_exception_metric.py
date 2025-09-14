@@ -1,10 +1,8 @@
-import os
 from core import metrics
 from core.events import on, emit, reset_listeners_for_tests, GenerationStarted
 
 
 def test_handler_exception_increments_metric():
-    os.environ["MIA_LLAMA_FAKE"] = "1"
     reset_listeners_for_tests()
     metrics.reset_for_tests()
 

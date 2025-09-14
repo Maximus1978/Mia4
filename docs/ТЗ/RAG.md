@@ -1,76 +1,27 @@
-# RAG
+# RAG (Retrieval-Augmented Generation)
 
-Кратко: модуль извлечения контекста (hybrid BM25 + vector + optional expansion) для построения промпта.
+Это индекс-страница пакета документации RAG. Цель: описать модуль извлечения контекста (hybrid BM25 + vector + optional expansion) для построения промпта с наблюдаемостью, тестируемостью и управлением через конфиг/ADR.
 
-## Процесс
+Состав пакета:
 
-1. Detect intent / нормализация.
-2. (Optional) Query expansion.
-3. Hybrid retrieve (BM25 + vector).
-4. Re-rank (score fusion).
-5. Build context (token budget, dedupe).
-6. Emit RAG.ResultsReady.
+- Архитектура и потоки: `RAG/Architecture.md`
+- Интерфейсы и контракты: `RAG/Interfaces.md`
+- Данные и схемы: `RAG/Data-Schemas.md`
+- События и метрики: `RAG/Events-and-Metrics.md`
+- Конфигурация (proposed): `RAG/Config-Proposed.md`
+- Тестирование и оценка качества: `RAG/Testing-and-Eval.md`
+- Безопасность и приватность: `RAG/Security-and-Privacy.md`
+- ADR (решение по каркасу и контрактам): `../ADR/ADR-0032-RAG-Module-and-Contracts.md`
+- README (оглавление пакета): `RAG/README.md`
+- Глоссарий: `RAG/Glossary.md`
+- Датасет для оценки: `RAG/Evaluation-Dataset.md`
+- Нормализация и фьюжн скорингов: `RAG/Normalization-and-Scoring.md`
 
-## Что индексируем
+Быстрый обзор:
 
-- Диалоги (role=user|assistant, ts, emotion_tag).
-- Инсайты (summary, novelty_score).
-- Документы (source=file / ingest).
+- Процесс: intent → (opt) expansion → hybrid retrieve (BM25 + vector) → fusion/rerank → context build (budget, dedupe) → событие RAG.ResultsReady.
+- Источники: диалоги, инсайты, документы (ingest). Эмоции — метаданные, не влияют на retrieve напрямую.
+- Наблюдаемость: события RAG.* и метрики retrieval_latency_ms, hit@k, mrr, context_tokens и др. (см. раздел метрик).
 
-## Формат chunk
-
-{ id, source_id, type, text, tokens, created_ts, meta{emotion_hint?, tags[]} }
-
-## События
-
-- RAG.QueryRequested {query, user_id, time}
-- RAG.ResultsReady {query, top_k, items[]}
-- RAG.IndexRebuilt {count, duration_ms}
-
-Canonical definitions: `Events.md` (эта секция обзорная).
-
-## Метрики
-
-| Metric | Описание | Цель |
-|--------|----------|------|
-| retrieval_latency_ms | время 2–5 шага | <120 |
-| hit@5 | релевант среди top5 (eval set) | >0.7 |
-| mrr | средняя обратная позиция | рост |
-| context_tokens | итоговые токены в prompt | <=0.8 окна |
-
-## Алгоритмы (используемые)
-
-| Этап | Техника |
-|------|---------|
-| Lexical | BM25 (rank-bm25) |
-| Vector | bge-m3 embeddings |
-| Fusion | `score = w_sem * norm_sem + w_bm25 * norm_bm25` |
-| Expansion (opt) | lightweight LLM rewrite |
-
-## Стратегии
-
-| Стратегия | Назначение | Статус |
-|-----------|-----------|--------|
-| Hybrid (semantic+bm25) | Основной retrieve | Active |
-| Query Expansion | Уменьшить пропуски | Optional |
-| Relevance Feedback | Адаптация весов | Planned |
-| Multi-hop | Сложные вопросы | Planned |
-
-## Границы
-
-Эмоции не регулируют retrieve (только метаданные). Vision/ingest → поставщики документов.
-
-## Memory Integration
-
-Использует MemoryQuery контракт (см. `Memory.md`). Поля необходимых сущностей: DiaryEntry.text, DiaryEntry.ts, Insight.summary.
-
-## Нормализация скорингов (skeleton)
-
-| Component | Raw Score Symbol | Normalization Method | Formula Placeholder | Notes |
-|-----------|------------------|----------------------|--------------------|-------|
-| Semantic | score_sem | min-max / z-score (decide) | norm_sem = ... | |
-| BM25 | score_bm25 | min-max / log scaling (decide) | norm_bm25 = ... | |
-| Fusion | final_score | weighted sum | final = w_sem*norm_sem + w_bm25*norm_bm25 | weights config |
-
-TODO: choose method (likely per-batch min-max with epsilon).
+Примечание: эта страница — индекс. Подробности раскрыты в файлах внутри `docs/ТЗ/RAG/`.
 

@@ -1,4 +1,3 @@
-import os
 
 from core.events import on, reset_listeners_for_tests
 from core.llm.agent_ops import judge, plan
@@ -6,7 +5,6 @@ from core import metrics
 
 
 def test_metrics_snapshot_counters_increment():
-    os.environ["MIA_LLAMA_FAKE"] = "1"
     metrics.reset_for_tests()
     # attach dummy listener (metrics collector already subscribed globally)
     on(lambda n, p: None)

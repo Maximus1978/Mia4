@@ -13,13 +13,15 @@
 | ChecksumMismatch | model_id, expected, actual | path | ModelRegistry | Alerting | Блокирующая ошибка | 1 |
 | JudgeInvocation | request_id, model_id, target_request_id | agreement | Eval | Metrics | Вызов судьи (MoE) | 1 |
 | PlanGenerated | request_id, steps_count | model_id | Planner | AgentLoop | План задач | 1 |
-| ReasoningPresetApplied | request_id, mode | temperature, top_p | Orchestrator | Metrics | Применён пресет reasoning (до генерации) | 1 |
+| ReasoningPresetApplied | request_id, preset, mode | temperature, top_p, overridden_fields | Orchestrатор | Metrics | Применён reasoning пресет (mode baseline/overridden; overridden_fields изменённые ключи) | 2 |
 | Session.Created | session_id, workspace_id | title | SessionService | UI, Memory | Создана новая сессия | 1 |
 | Session.TitleUpdated | session_id, title, auto | workspace_id | SessionService | UI | Обновлён заголовок | 1 |
 | Message.Appended | message_id, session_id, workspace_id, role | token_counts | SessionService | Memory, RAG | Сообщение добавлено | 1 |
 | Attachment.Stored | attachment_id, session_id, workspace_id, mime, size | hash | AttachmentService | IngestWorker | Файл сохранён | 1 |
 | Ingest.Requested | attachment_id, embed_model | workspace_id | AttachmentService | IngestWorker | Индексация запрошена | 1 |
+| RAG.QueryRequested | request_id, query, user_id | expansion_planned, strategies[], top_k | RAG | Orchestrator | Запрос RAG инициализирован | 1 |
 | RAG.ResultsReady | request_id, items[], latency_ms | top_k | RAG | Orchestrator | Результаты retrieval | 1 |
+| RAG.IndexRebuilt | count, duration_ms | collection | RAG | Metrics | Полная перестройка индекса | 1 |
 | WakeWord.Detected | ts, confidence, phrase | device_id | SensorService | AgentLoop | Активация голосом | 1 |
 | Tone.Classified | message_id, tone_label, confidence | model_id | EmotionAnalyzer | PreferenceEngine | Классификация тона | 1 |
 | Preference.Updated | user_id, changed_fields[] | traits_delta | PreferenceEngine | UI | Обновлены предпочтения | 1 |
@@ -34,6 +36,8 @@
 | Media.Generated | media_id, media_type, model_id, latency_ms | resolution, duration_ms | MediaService | UI | Медиа готово | 1 |
 | Camera.FrameCaptured | media_id, resolution | device_id | SensorService | MediaService | Кадр камеры | 1 |
 | Camera.ClipCaptured | media_id, duration_ms, resolution | device_id | SensorService | MediaService | Видеоклип камеры | 1 |
+| ToolCallPlanned | request_id, tool, args_preview_hash, seq | args_schema_version | Route (Harmony adapter) | Metrics | Планируемый вызов инструмента (аргументы хэшированы) | 1 |
+| ToolCallResult | request_id, tool, status, latency_ms, seq | error_type, message | Route (Harmony adapter) | Metrics | Результат синтетического (MVP) вызова | 1 |
 
 Правила:
 
@@ -48,6 +52,25 @@ Cross-links:
 - API SSE contract: `../API.md#post-generate-sse`
 - Config registry: `Config-Registry.md` (llm.postproc.*, llm.reasoning_presets.*, llm.stop)
 - ADR: ADR-0012 (GenerationResult), ADR-0015 (Model Fallback & Stub), ADR-0016 (Model Passports)
+- Postproc & leakage remediation: ADR-0014 (hotfix 2025-09-01)
+
+## Derived Metrics Mapping (Generation / Postproc)
+
+| Metric | Source Event / Stage | Labels | Purpose | Notes |
+|--------|----------------------|--------|---------|-------|
+| generation_first_token_latency_ms | First token emission (SSE) | model | UX latency p50/p95 | Observed on first token frame |
+| generation_latency_ms | GenerationCompleted | model | Total wall latency | Includes reasoning buffer time |
+| generation_decode_tps | Route post-completion | model | Throughput (tokens/s) | Derived (tokens/seconds) |
+| reasoning_buffer_latency_ms | Postproc finalization | model | Buffer overhead | 0 when no reasoning or no buffer |
+| reasoning_ratio_alert_total | Route helper | model, bucket | Governance (excess reasoning) | bucket=above/below threshold |
+| reasoning_leak_total | Postproc heuristic (legacy marker) | mode | Safety: unintended leak detection | legacy only (Harmony full) |
+| tool_calls_total | ToolCallResult | tool\+status | Usage frequency / errors | status=ok\|error |
+| tool_call_latency_ms | ToolCallResult | tool | Perf distribution | synthetic MVP near-zero |
+| sse_stream_open_total | Route entry | model | Traffic | Increments at stream start |
+| sse_stream_close_total | Route end | model, reason | Traffic / reliability | reason=ok/error |
+| model_provider_reuse_total | Model registry (alias) | model | Alias reuse observability | Increments when alias attached |
+
+Absence of `reasoning_leak_total` counter in snapshot implies zero detected leaks so far.
 
 ## Пример лог-записи ReasoningPresetApplied
 

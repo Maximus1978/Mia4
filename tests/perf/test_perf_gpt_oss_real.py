@@ -25,9 +25,6 @@ def test_perf_gpt_oss_real():
     if os.environ.get("MIA_REAL_PERF") != "1":
         pytest.skip("Set MIA_REAL_PERF=1 to run real performance test")
 
-    # Ensure fake mode disabled
-    os.environ["MIA_LLAMA_FAKE"] = "0"
-
     model_id = "gpt-oss-20b-mxfp4"
     repo_root = Path(".").resolve()
     manifest_path = repo_root / "llm" / "registry" / f"{model_id}.yaml"

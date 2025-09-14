@@ -2,7 +2,6 @@ from core.events import reset_listeners_for_tests
 from core.llm.factory import get_model, clear_provider_cache
 from core.registry.loader import clear_manifest_cache, compute_sha256
 from pathlib import Path
-import os
 import textwrap
 
 
@@ -33,7 +32,6 @@ def _make_manifest(tmp_path: Path, fname: str) -> None:
 
 
 def test_generation_chunk_sequence_and_final(tmp_path: Path):
-    os.environ["MIA_LLAMA_FAKE"] = "1"
     reset_listeners_for_tests()
     _make_manifest(tmp_path, "primary.gguf")
     clear_manifest_cache()

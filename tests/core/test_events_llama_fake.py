@@ -1,4 +1,3 @@
-import os
 from pathlib import Path
 import textwrap
 
@@ -33,8 +32,7 @@ def _make_manifest(tmp_path: Path, fname: str) -> None:
     manifest_file.write_text(manifest_text, encoding="utf-8")
 
 
-def test_events_emit_for_fake_generation(tmp_path: Path):
-    os.environ["MIA_LLAMA_FAKE"] = "1"
+def test_events_emit_for_generation(tmp_path: Path):
     _make_manifest(tmp_path, "primary.gguf")
     clear_manifest_cache()
     clear_provider_cache()

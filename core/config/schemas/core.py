@@ -1,4 +1,4 @@
-"""Core / system level schemas (system, embeddings, storage, emotion, reflection)."""
+"""Core/system schemas: system, embeddings, storage, emotion, reflection."""
 from __future__ import annotations
 
 from pydantic import BaseModel
@@ -9,8 +9,8 @@ class EmbeddingConfig(BaseModel):
 
 
 class EmbeddingsConfig(BaseModel):
-    main: EmbeddingConfig
-    fallback: EmbeddingConfig
+    main: EmbeddingConfig = EmbeddingConfig(id="bge-m3")
+    fallback: EmbeddingConfig = EmbeddingConfig(id="gte-small")
 
 
 class EmotionFSMConfig(BaseModel):
@@ -22,8 +22,10 @@ class EmotionModelRef(BaseModel):
 
 
 class EmotionConfig(BaseModel):
-    model: EmotionModelRef
-    fsm: EmotionFSMConfig
+    model: EmotionModelRef = EmotionModelRef(
+        id="distilroberta-multilingual-emotion"
+    )
+    fsm: EmotionFSMConfig = EmotionFSMConfig()
 
 
 class ReflectionSchedule(BaseModel):

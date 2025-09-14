@@ -1,0 +1,9 @@
+id: phi-3.5-mini-instruct-q4_0
+family: phi
+role: lightweight
+path: models/Phi-3.5-mini/Phi-3.5-mini-instruct_Uncensored-Q4_K_M.gguf
+quant: q4_0
+context_length: 8192
+capabilities: [chat]
+checksum_sha256: "9ad0e44f9441c0ffb4adc8f3bd3a9ba3d662aaa82f617a6dfbff6d4ae31a946d"
+revision: r1

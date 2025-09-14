@@ -1,10 +1,8 @@
-import os
 from core.llm.agent_ops import judge, plan
 from core.events import on, reset_listeners_for_tests
 
 
 def test_judge_event_emitted():
-    os.environ["MIA_LLAMA_FAKE"] = "1"
     events = []
     on(lambda n, p: events.append((n, p)))
     res = judge(target_request_id="req123", prompt="Test answer quality")
@@ -16,7 +14,6 @@ def test_judge_event_emitted():
 
 
 def test_plan_event_emitted():
-    os.environ["MIA_LLAMA_FAKE"] = "1"
     events = []
     on(lambda n, p: events.append((n, p)))
     res = plan(objective="Implement idle sweep", max_steps=5)

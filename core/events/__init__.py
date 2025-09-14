@@ -1,8 +1,9 @@
 """Event dataclasses + legacy any-subscriber bridge (single clean copy).
 
 Preferred: use `core.eventbus` for per-event subscriptions.
-This transitional module exposes `subscribe(handler)` where handler(name, payload)
-receives every event. Will be removed after migration.
+This transitional module exposes `subscribe(handler)` where
+handler(name, payload) receives every event. Will be removed after
+migration.
 """
 from __future__ import annotations
 
@@ -54,6 +55,23 @@ class ModelUnloaded(BaseEvent):
 
 
 @dataclass(slots=True)
+class ModelAliasedLoaded(BaseEvent):
+    alias_id: str
+    base_id: str
+    role: str
+    base_role: str
+    reuse: bool = True
+
+
+@dataclass(slots=True)
+class ModelDowngraded(BaseEvent):
+    model_id: str
+    role: str
+    reason: str  # e.g. low_vram
+    free_vram_mb_before: int | None = None
+
+
+@dataclass(slots=True)
 class GenerationStarted(BaseEvent):
     request_id: str
     model_id: str
@@ -61,6 +79,16 @@ class GenerationStarted(BaseEvent):
     prompt_tokens: int
     parent_request_id: str | None = None
     correlation_id: str | None = None
+    system_prompt_version: int | None = None
+    system_prompt_hash: str | None = None
+    persona_len: int | None = None
+    sampling: dict | None = None  # optional sampling params snapshot
+    sampling_origin: str | None = None  # passport|preset|user|mixed
+    merged_sampling: dict | None = None  # final merged values (normalized)
+    # effective stop sequences (if any)
+    stop_sequences: list[str] | None = None
+    cap_applied: bool | None = None  # True если max_tokens был урезан
+    # паспортным лимитом
 
 
 @dataclass(slots=True)
@@ -87,6 +115,34 @@ class GenerationCompleted(BaseEvent):
     error_type: str | None = None
     message: str | None = None
     stop_reason: str | None = None
+    sampling_origin: str | None = None
+    merged_sampling: dict | None = None
+
+
+@dataclass(slots=True)
+class GenerationCancelled(BaseEvent):
+    """Generation cancelled mid-flight (user abort or timeout)."""
+    request_id: str
+    model_id: str
+    role: str
+    reason: str  # user_abort|timeout
+    latency_ms: int
+    output_tokens: int
+    correlation_id: str | None = None
+    message: str | None = None
+
+
+@dataclass(slots=True)
+class CancelLatencyMeasured(BaseEvent):
+    """End-to-end user cancel latency measurement.
+
+    duration_ms: total time from abort receipt to SSE end.
+    path: abort path (user_abort|timeout); only user_abort measured.
+    """
+    request_id: str
+    model_id: str | None
+    duration_ms: int
+    path: str
 
 
 @dataclass(slots=True)
@@ -115,22 +171,148 @@ class PlanGenerated(BaseEvent):
 
 @dataclass(slots=True)
 class ReasoningPresetApplied(BaseEvent):
+    """Reasoning preset selection (v2).
+
+    preset: preset name (low|medium|high|custom future)
+    mode: baseline|overridden (whether user overrides changed preset fields)
+    overridden_fields: list of keys changed by user overrides (if any)
+    """
     request_id: str
-    mode: str
+    preset: str
+    mode: str  # baseline|overridden
     temperature: float | None = None
     top_p: float | None = None
+    overridden_fields: list[str] | None = None
+
+
+@dataclass(slots=True)
+class ModelRouted(BaseEvent):
+    """Model routing decision snapshot.
+
+    Emitted after pipeline selection but before streaming starts.
+    capabilities: optional dict like {"tool_calls": bool,
+    "reasoning_split": bool}
+    """
+    request_id: str
+    model_id: str
+    pipeline: str  # primary|lightweight|...
+    capabilities: dict | None = None
+
+
+@dataclass(slots=True)
+class ModelPassportMismatch(BaseEvent):
+    """Passport vs config mismatch (warning).
+
+    Emitted when model passport declared limits diverge from configured
+    limits (e.g. max_output_tokens). Allows surfacing drift.
+    field: which field mismatched (currently only max_output_tokens).
+    passport_value / config_value: numeric values observed.
+    """
+    model_id: str
+    field: str
+    passport_value: int | None
+    config_value: int | None
+
+
+@dataclass(slots=True)
+class ToolCallPlanned(BaseEvent):
+    """Planned tool call (MVP no-op execution).
+
+    args_preview_hash: privacy-preserving hash of truncated canonical args.
+    seq: order within the request (0-based).
+    """
+    request_id: str
+    tool: str
+    args_preview_hash: str
+    seq: int
+    args_schema_version: str | None = None
+
+
+@dataclass(slots=True)
+class ToolCallResult(BaseEvent):
+    """Result of tool call (synthetic immediate for MVP).
+
+    status: ok|error
+    latency_ms: synthetic latency (0-1ms typical for stub)
+    error_type/message only on failure.
+    """
+    request_id: str
+    tool: str
+    status: str
+    latency_ms: int
+    seq: int
+    error_type: str | None = None
+    message: str | None = None
 
 
 _ANY_SUBS: List[EventHandler] = []
+# Generation counter used by tests: each call to reset_listeners_for_tests
+# increments this so already-loaded providers can re-emit ModelLoaded when
+# first accessed in a new test without needing to fully reload weights.
+_EVENT_GENERATION = 0
 
 
-def _metrics_collector(name: str, payload: Dict[str, Any]) -> None:  # noqa: D401
-    if name in {"GenerationStarted", "GenerationChunk", "GenerationCompleted", "GenerationFailed"}:
+def get_event_generation() -> int:  # pragma: no cover - lightweight helper
+    return _EVENT_GENERATION
+
+
+def _metrics_collector(
+    name: str, payload: Dict[str, Any]
+) -> None:  # noqa: D401
+    gen_names = {
+        "GenerationStarted",
+        "GenerationChunk",
+        "GenerationCompleted",
+        "GenerationFailed",
+        "GenerationCancelled",
+    }
+    if name in gen_names:
         _metrics.inc("events_generation", {"type": name[10:].lower()})
     elif name in {"ModelLoaded", "ModelUnloaded"}:
         _metrics.inc("events_" + name.lower(), {"role": payload.get("role")})
+    elif name == "ModelAliasedLoaded":
+        _metrics.inc(
+            "model_provider_reuse_total",
+            {"role": payload.get("role")},
+        )
+    elif name == "ModelDowngraded":
+        _metrics.inc(
+            "model_downgraded_total",
+            {"reason": payload.get("reason", "unknown")},
+        )
     elif name == "ReasoningPresetApplied":
         _metrics.inc("reasoning_mode", {"mode": payload.get("mode")})
+    elif name == "ModelPassportMismatch":
+        _metrics.inc(
+            "model_passport_mismatch_total",
+            {"field": payload.get("field", "unknown")},
+        )
+    elif name == "CancelLatencyMeasured":
+        _metrics.observe(
+            "cancel_latency_ms",
+            payload.get("duration_ms", 0),
+            {"path": payload.get("path", "unknown")},
+        )
+    # debug counter to ensure path executed (can be removed later)
+        _metrics.inc(
+            "cancel_latency_events_total",
+            {"path": payload.get("path", "unknown")},
+        )
+    elif name == "ToolCallResult":
+        # Increment frequency counter with status label
+        _metrics.inc(
+            "tool_calls_total",
+            {
+                "tool": payload.get("tool", "unknown"),
+                "status": payload.get("status", "unknown"),
+            },
+        )
+        # Observe latency histogram
+        _metrics.observe(
+            "tool_call_latency_ms",
+            payload.get("latency_ms", 0),
+            {"tool": payload.get("tool", "unknown")},
+        )
 
 
 _ANY_SUBS.append(_metrics_collector)
@@ -163,8 +345,11 @@ def subscribe(handler: EventHandler):  # backward compatible helper
 
 
 def reset_listeners_for_tests() -> None:  # pragma: no cover
+    global _EVENT_GENERATION  # noqa: PLW0603
     _ANY_SUBS.clear()
     _ANY_SUBS.append(_metrics_collector)
+    # Bump generation so cached providers know to re-emit ModelLoaded
+    _EVENT_GENERATION += 1
 
 
 __all__ = [
@@ -174,12 +359,20 @@ __all__ = [
     "ModelLoaded",
     "ModelLoadFailed",
     "ModelUnloaded",
+    "ModelAliasedLoaded",
+    "ModelDowngraded",
     "GenerationStarted",
     "GenerationChunk",
     "GenerationCompleted",
     "GenerationFailed",
+    "GenerationCancelled",
     "JudgeInvocation",
     "PlanGenerated",
     "ReasoningPresetApplied",
+    "CancelLatencyMeasured",
+    "ModelPassportMismatch",
+    "ToolCallPlanned",
+    "ToolCallResult",
     "reset_listeners_for_tests",
+    "get_event_generation",
 ]

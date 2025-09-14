@@ -36,9 +36,11 @@ def judge(
         emit(
             ReasoningPresetApplied(
                 request_id=req_id,
-                mode=reasoning_mode,
+                preset=reasoning_mode,
+                mode="baseline",
                 temperature=gen_kwargs.get("temperature"),
                 top_p=gen_kwargs.get("top_p"),
+                overridden_fields=None,
             )
         )
     gen = provider.generate(prompt, **gen_kwargs, max_tokens=64)
@@ -77,9 +79,11 @@ def plan(
         emit(
             ReasoningPresetApplied(
                 request_id=req_id,
-                mode=reasoning_mode,
+                preset=reasoning_mode,
+                mode="baseline",
                 temperature=gen_kwargs.get("temperature"),
                 top_p=gen_kwargs.get("top_p"),
+                overridden_fields=None,
             )
         )
     gen = provider.generate(prompt, **gen_kwargs, max_tokens=128)

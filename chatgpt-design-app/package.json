@@ -1,0 +1,32 @@
+{
+  "name": "chatgpt-design-app",
+  "version": "1.0.0",
+  "description": "A ChatGPT design application with a collapsible left panel and interactive chat features.",
+  "main": "src/main.tsx",
+  "scripts": {
+    "start": "vite",
+    "build": "vite build",
+    "serve": "vite preview"
+  },
+  "dependencies": {
+  "react": "^18.2.0",
+  "react-dom": "^18.2.0",
+  "vite": "^2.6.4",
+  "@vitejs/plugin-react": "^1.0.0",
+    "typescript": "^4.4.3"
+  },
+  "devDependencies": {
+  "@types/react": "^18.2.0",
+  "@types/react-dom": "^18.2.0",
+    "eslint": "^7.32.0",
+    "eslint-plugin-react": "^7.27.1"
+  },
+  "keywords": [
+    "chat",
+    "gpt",
+    "react",
+    "vite"
+  ],
+  "author": "Your Name",
+  "license": "MIT"
+}

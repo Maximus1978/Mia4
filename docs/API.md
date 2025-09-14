@@ -82,18 +82,34 @@ Request JSON:
 }
 ```
 
-Response: `Content-Type: text/event-stream` frames:
+Response (SSE frames):
 
-- `event: token` data: `{ seq:int, text:str, tokens_out:int, request_id, model_id }`
-- `event: reasoning` (optional; only if postproc.reasoning.drop_from_history = false and reasoning produced)
-  data: `{ request_id, model_id, reasoning:str }` (full buffered chain-of-thought up to marker)
+Mandatory / current:
+
+- `event: token` data: `{ seq:int, text:str, tokens_out:int, request_id, model_id }` (final channel user‑visible deltas)
+- `event: analysis` data: `{ request_id, model_id, text:str }` (Harmony reasoning channel; NOT persisted; may be suppressed in minimal mode)
 - `event: usage` data: `{ request_id, model_id, prompt_tokens:int, output_tokens:int, latency_ms:int, decode_tps:float, reasoning_tokens:int?, final_tokens:int?, reasoning_ratio:float? }`
-- `event: error` data: `{ request_id, model_id, code, error_type, message }` (UI displays `code`)
+- `event: error` data: `{ request_id, model_id, code, error_type, message }`
 - `event: end` data: `{ request_id, status:"ok"|"error" }`
 
-Planned (Sprint 3A/3B extensions):
+Tool calling (Harmony tool channel):
 
-- `event: analysis` (Harmony Stage 2) data: `{ request_id, text, seq }` (reasoning channel) — optional.
+- `event: commentary` may include a JSON stringified tool result payload (synthetic for MVP) with shape `{tool, status, ok, error_type?, message?, preview_hash?, args_redacted?, raw_args?}` depending on retention mode.
+- Internal events (not SSE) emitted on bus: `ToolCallPlanned{request_id,tool,args_preview_hash,seq}` then `ToolCallResult{request_id,tool,status,latency_ms,seq,error_type?,message?}`.
+- Payload size limit configurable: `llm.tool_calling.max_payload_bytes` (default 8192). Oversize → `status=error`, `error_type=tool_payload_too_large`.
+- Malformed JSON → `status=error`, `error_type=tool_payload_parse_error`.
+- Retention modes (`llm.tool_calling.retention.mode`):
+  - `metrics_only` (no tool result body beyond status commentary line)
+  - `hashed_slice` (includes `preview_hash`)
+  - `redacted_snippets` (hash + `args_redacted` placeholder)
+  - `raw_ephemeral` (hash + trimmed raw args – debug only)
+
+Final token accounting guarantee:
+Adapter flushes any undispatched final deltas on `finalize()` so `final_tokens == count(token events)` always holds.
+
+Legacy / conditional:
+
+- `event: reasoning` (legacy marker mode only; buffered full reasoning text when `drop_from_history=false`). New Harmony path uses streaming `analysis` events instead.
 
 
 Sampling metadata:
@@ -129,23 +145,18 @@ Sampling origins (Sprint 3A):
 
 Merged sampling object (`GenerationStarted.sampling`) also carries `filtered_out` plus explicit `max_tokens` (alias of effective `max_output_tokens`) and is mirrored in `GenerationCompleted.result_summary.sampling`.
 
-Reasoning-specific behavior:
+Reasoning & Harmony channels (единственный режим):
 
-- Split performed by marker (default `===FINAL===`). Text before marker treated as reasoning, withheld from token stream (buffered) and optionally emitted as separate `reasoning` event.
-- If marker absent, all output treated as final answer (reasoning_tokens=0 fallback).
-- `reasoning_tokens` counts whitespace-split tokens prior to marker capped by `postproc.reasoning.max_tokens`.
-- Reasoning presets can override this cap via per-preset key `reasoning_max_tokens` (low/medium/high example: 128/256/512). Applied server-side each request.
-- If `drop_from_history=true` (default) reasoning is never sent to client nor stored; only aggregate counts appear in `usage`.
-- Metric `reasoning_buffer_latency_ms` (Prometheus) records delay between final marker detection and stream completion.
+- Model emits structured channel tokens (Harmony format) internally; adapter extracts `analysis` vs `final`.
+- `analysis` deltas stream as separate SSE events and are excluded from session history regardless of `drop_from_history`.
+- `commentary` (pass-through, не считаются в reasoning/final токены) может появляться для пользовательских преамбул (action plan) и отображается как `event: commentary`.
+- `reasoning_tokens` counts whitespace‑split analysis tokens up to `postproc.reasoning.max_tokens` (or preset override `reasoning_max_tokens`).
+- `final_tokens` counts user‑visible tokens (token events).
+- `reasoning_ratio = reasoning_tokens / (reasoning_tokens + final_tokens)` (0 if denominator 0).
+- Alert threshold configured via `llm.postproc.reasoning.ratio_alert_threshold`; crossings increment alert metric.
+- Metric `reasoning_buffer_latency_ms` retained (legacy—may read 0 when no buffering occurred).
 
-Harmony tag mode (experimental):
-
-- Enable via `llm.prompt.harmony.enabled=true`.
-- Model expected to emit `<analysis>...</analysis><final>...</final>` (tag names configurable in config registry).
-- Stage 1 implementation buffers full output, then streams only `<final>` content as token events (no separate `reasoning` SSE yet).
-- If tags missing → fallback to marker behavior described above.
-- `drop_from_history` suppression currently applies only to marker mode (policy for Harmony pending) — reasoning text may still appear in final stats event; do not persist it client-side.
-- Future Stage 2: incremental streaming + dedicated `analysis` SSE channel, then removal of need for `===FINAL===` marker.
+Legacy marker режим удалён; при отсутствии Harmony спец‑токенов весь вывод = final (reasoning_tokens=0). Commentary поддерживается как прозрачный канал.
 
 ReasoningPresetApplied emitted to internal eventbus when reasoning_preset supplied.
 
@@ -155,18 +166,27 @@ Notes:
 - prompt_tokens is approximate (whitespace split placeholder).
 - decode_tps = output_tokens / (latency_ms/1000).
 
+Test-mode aids (MIA_TEST_MODE=1 only):
+
+- A lightweight `meta` SSE frame is emitted at the very start with
+  `{ request_id, model_id, status }` to help tests obtain `request_id`
+  deterministically before tokens.
+- When dev overrides are provided, a small pre-stream delay may be applied to
+  allow clients to wire cancellation before the first token.
+Both behaviors are disabled in production (when `MIA_TEST_MODE` is not set).
+
 ### Stop Sequences
 
 Configured via `llm.stop` (list of strings). On match:
 
-- Truncates trailing matched sequence from final answer.
+- Truncates trailing matched sequence from final answer (after stream assembly safeguard).
 - Emits `GenerationCompleted.stop_reason="stop_sequence"`.
-- Marker `===FINAL===` retained as fallback until Harmony Stage 2 stable.
+- In Harmony mode stop sequences operate only on `final` channel output (analysis unaffected).
 
 
 ### Cancellation (Sprint 3B)
 
-Endpoint (proposed): `POST /cancel/{request_id}` — sets cancel token. Stream ends with `stop_reason="cancelled"` and partial output.
+Endpoint (planned): `POST /cancel/{request_id}` — sets cancel token. Stream ends with `stop_reason="cancelled"` and partial output; будет событие `GenerationCancelled` + метрика `generation_cancelled_total{reason}`.
 
 ### Persona & Obsidian (Sprint 3C)
 

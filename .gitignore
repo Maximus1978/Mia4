@@ -51,6 +51,15 @@ requirements.lock
 # Local knowledge base / editor metadata
 .obsidian/
 
+# Node.js (frontend) artifacts
+node_modules/
+chatgpt-design-app/node_modules/
+chatgpt-design-app/dist/
+chatgpt-design-app/.vite/
+
+# Local launch temp
+.launch_tmp/
+
 # Binary installers / large local binaries
 *.exe
 *.msi

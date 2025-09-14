@@ -1,0 +1,38 @@
+{
+  "sessions": [
+    {
+      "id": "session1",
+      "title": "First Session",
+      "date": "2025-08-01",
+      "messages": [
+        {
+          "sender": "user",
+          "content": "Hello, how can I improve my productivity?",
+          "timestamp": "2025-08-01T10:00:00Z"
+        },
+        {
+          "sender": "ai",
+          "content": "Here are some tips to enhance your productivity...",
+          "timestamp": "2025-08-01T10:01:00Z"
+        }
+      ]
+    },
+    {
+      "id": "session2",
+      "title": "Second Session",
+      "date": "2025-08-15",
+      "messages": [
+        {
+          "sender": "user",
+          "content": "What are the best practices for remote work?",
+          "timestamp": "2025-08-15T14:30:00Z"
+        },
+        {
+          "sender": "ai",
+          "content": "Some best practices include setting a schedule, creating a dedicated workspace...",
+          "timestamp": "2025-08-15T14:31:00Z"
+        }
+      ]
+    }
+  ]
+}

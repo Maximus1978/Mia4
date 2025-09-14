@@ -1,12 +1,10 @@
-from core.llm import ModelProvider, DummyProvider, ModelInfo
+from core.llm import ModelProvider, ModelInfo
 
 
-def test_dummy_provider_generate_and_stream():
-    provider: ModelProvider = DummyProvider(model_id="test-dummy")
-    res = provider.generate("hello world")
-    assert res.text.lower().startswith("echo: hello")
-    tokens = list(provider.stream("hello world"))
-    assert len(tokens) >= 2
+def test_model_provider_interface_shape():
+    # Ensure abstract interface exposes expected methods.
+    for attr in ("load", "generate", "stream", "info"):
+        assert hasattr(ModelProvider, attr)
 
 
 def test_model_info_dataclass():

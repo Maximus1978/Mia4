@@ -45,9 +45,19 @@ def iter_models():
 def model_fields(cls: type[BaseModel]):
     for fname, field in cls.model_fields.items():  # type: ignore[attr-defined]
         ftype = get_type_hints(cls).get(fname, str(field.annotation))
-        default = field.default if field.default is not None else (
-            field.default_factory() if field.default_factory else "(required)"
-        )
+        if field.default is not None:
+            default = field.default
+        elif field.default_factory:
+            try:
+                sample = field.default_factory()
+                if isinstance(sample, dict) and not sample:
+                    default = '{}'
+                else:
+                    default = sample
+            except Exception:
+                default = '(factory)'
+        else:
+            default = '(required)'
         yield fname, ftype, default, field.description or ""
 
 

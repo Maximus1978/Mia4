@@ -18,7 +18,7 @@
 Исходный прогон (2025-08-21):
 
 ```text
-model: gpt-oss-20b-q4km (Q4_K_M)
+model: gpt-oss-20b-q4km (Q4_K_M) (см. также паспорт [gpt-oss-20b-mxfp4](passports/gpt-oss-20b-mxfp4.md) для текущего primary)
 load_ms: 2227
 tokens_out: 54
 gen_latency_s: 8.2256
