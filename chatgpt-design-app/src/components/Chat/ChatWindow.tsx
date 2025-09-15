@@ -4,7 +4,7 @@ import AIMessage from './AIMessage';
 import FeedbackButtons from './FeedbackButtons';
 import InputBar from './InputBar';
 import '../../styles/globals.css';
-import { streamGenerate, TokenEvent, UsageEvent, ReasoningEvent } from '../../api';
+import { streamGenerate, TokenEvent, UsageEvent, ReasoningEvent, StreamHandle, fetchModels, ModelInfo } from '../../api';
 import { GenerationSettings } from '../Settings/SettingsPopover';
 
 interface Msg { type: 'user' | 'ai'; content: string }
@@ -20,6 +20,23 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ model, settings }: ChatWindowPr
     const [error, setError] = useState<{ code: string; message: string } | null>(null);
     const [latestReasoning, setLatestReasoning] = useState<string | null>(null);
     const [showReasoning, setShowReasoning] = useState<boolean>(false);
+    const [e2eMs, setE2eMs] = useState<number | null>(null);
+    const startTsRef = useRef<number | null>(null);
+    const [contextLen, setContextLen] = useState<number | null>(null);
+
+    useEffect(() => {
+        let cancelled = false;
+        async function loadCtx() {
+            try {
+                const models: ModelInfo[] = await fetchModels();
+                if (cancelled) return;
+                const info = model ? models.find(m => m.id === model) : undefined;
+                setContextLen(info?.context_length ?? null);
+            } catch { if (!cancelled) setContextLen(null); }
+        }
+        loadCtx();
+        return () => { cancelled = true; };
+    }, [model]);
         // Stable session id across reloads (was incorrectly storing a function leading to missing session_id in JSON -> 422)
         function _initSessionId(): string {
             const saved = localStorage.getItem('mia.chat.session_id');
@@ -36,7 +53,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ model, settings }: ChatWindowPr
     useEffect(() => {
         if (model) localStorage.setItem('mia.chat.model', model);
     }, [model]);
-    const abortRef = useRef<() => void>();
+    const abortRef = useRef<StreamHandle | null>(null);
 
     const handleSendMessage = (text: string) => {
         if (!text.trim()) return;
@@ -46,6 +63,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ model, settings }: ChatWindowPr
         }
             setMessages((m: Msg[]) => [...m, { type: 'user', content: text }, { type: 'ai', content: '' }]);
         setStreaming(true);
+            startTsRef.current = performance.now();
             const session_id = sessionIdRef.current; // ensured string
         const overrides = {
             temperature: settings.temperature,
@@ -53,6 +71,8 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ model, settings }: ChatWindowPr
             max_output_tokens: settings.max_output_tokens,
             persona: settings.persona || undefined,
             reasoning_preset: settings.reasoningPreset,
+            dev_pre_stream_delay_ms: settings.dev_pre_stream_delay_ms ?? undefined,
+            dev_per_token_delay_ms: settings.dev_per_token_delay_ms ?? undefined,
         };
         abortRef.current = streamGenerate({ session_id, model, prompt: text, overrides }, {
             onToken: (ev: TokenEvent) => {
@@ -79,13 +99,13 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ model, settings }: ChatWindowPr
                         return copy;
                     });
             },
-                    onEnd: () => setStreaming(false)
+            onEnd: () => { setStreaming(false); if (startTsRef.current != null) setE2eMs(Math.round(performance.now() - startTsRef.current)); }
         });
     };
-            const handleCancel = () => {
-                if (abortRef.current) abortRef.current();
-                setStreaming(false);
-            };
+    const handleCancel = () => {
+        abortRef.current?.cancel();
+        setStreaming(false);
+    };
 
     return (
             <div className="chat-window">
@@ -117,6 +137,20 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ model, settings }: ChatWindowPr
                         <span>latency: {lastUsage.latency_ms} ms</span>{' '}
                         <span>decode_tps: {lastUsage.decode_tps.toFixed(1)}</span>{' '}
                         <span>tokens: in {lastUsage.prompt_tokens} / out {lastUsage.output_tokens}</span>
+                        {(() => {
+                            const used = (lastUsage.context_used_tokens != null)
+                                ? lastUsage.context_used_tokens
+                                : (lastUsage.prompt_tokens + lastUsage.output_tokens);
+                            const total = (lastUsage.context_total_tokens != null)
+                                ? lastUsage.context_total_tokens
+                                : contextLen ?? null;
+                            if (typeof total === 'number') {
+                                const pct = Math.min(100, Math.round((used / Math.max(1, total)) * 100));
+                                return <span> context: {used}/{total} ({pct}%)</span>;
+                            }
+                            return null;
+                        })()}
+                        {typeof e2eMs === 'number' && <span> e2e: {e2eMs} ms</span>}
                         {typeof lastUsage.reasoning_ratio === 'number' && (
                             <span>
                                 {' '}reasoning: {lastUsage.reasoning_tokens ?? 0}/{lastUsage.final_tokens ?? lastUsage.output_tokens} ({(lastUsage.reasoning_ratio * 100).toFixed(0)}%)

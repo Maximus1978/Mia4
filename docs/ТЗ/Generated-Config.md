@@ -67,10 +67,26 @@
 
 | Field | Type | Default | Notes |
 |-------|------|---------|-------|
+| enabled | bool | True |  |
 | collection_default | str | memory |  |
 | top_k | int | 8 |  |
 | hybrid | RAGHybridConfig | weight_semantic=0.6 weight_bm25=0.4 |  |
-| normalize | RAGNormalizeConfig | min_score=0.0 max_score=1.0 |  |
+| normalize | RAGNormalizeConfig | method='minmax' epsilon=1e-06 min_score=0.0 max_score=1.0 |  |
+| context | RAGContextConfig | max_fraction_of_window=0.8 |  |
+| expansion | RAGExpansionConfig | enabled=False model='lightweight' |  |
+
+## RAGContextConfig (rag)
+
+| Field | Type | Default | Notes |
+|-------|------|---------|-------|
+| max_fraction_of_window | float | 0.8 |  |
+
+## RAGExpansionConfig (rag)
+
+| Field | Type | Default | Notes |
+|-------|------|---------|-------|
+| enabled | bool | False |  |
+| model | str | lightweight |  |
 
 ## RAGHybridConfig (rag)
 
@@ -83,6 +99,8 @@
 
 | Field | Type | Default | Notes |
 |-------|------|---------|-------|
+| method | str | minmax |  |
+| epsilon | float | 1e-06 |  |
 | min_score | float | 0.0 |  |
 | max_score | float | 1.0 |  |
 

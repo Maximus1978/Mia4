@@ -29,12 +29,22 @@ from .base import (
 
 
 class PrimaryPipeline(GenerationPipeline):  # pragma: no cover
+    def _approx_tokens(self, text: str) -> int:
+        try:
+            return max(1, len((text or "").split()))
+        except Exception:
+            return max(1, len(text) // 4)
+
     def _build_harmony_prompt(
         self,
-        system_prompt: str,
-        dev_block: str,
-        user_prompt: str,
+        *,
+        system_prompt_text: str,
+        dev_block_text: str,
         reasoning_mode: str | None,
+        session_messages: list[tuple[str, str]] | None,
+        user_prompt: str,
+        context_length: int | None,
+        reserved_output_tokens: int | None,
     ) -> tuple[str, int, str | None]:  # noqa: D401
         lvl = (reasoning_mode or "medium").lower()
         now = _dt.datetime.utcnow().strftime("%Y-%m-%d")
@@ -49,20 +59,69 @@ class PrimaryPipeline(GenerationPipeline):  # pragma: no cover
             ),
         ]
         system_msg = "\n".join(system_lines)
+        dev_block = dev_block_text
         if not dev_block.startswith("# Instructions"):
             dev_block = "# Instructions\n" + dev_block.strip()
-        prompt = (
-            "<|start|>system<|message|>" + system_msg + "<|end|>"
-            + "<|start|>developer<|message|>" + dev_block + "<|end|>"
-            + "<|start|>user<|message|>" + user_prompt + "<|end|>"
-            + "<|start|>assistant"
+    # Build history with a simple character budget heuristic
+    # (~4 chars/token)
+        chars_per_token = 4
+        budget_tokens = None
+        try:
+            if context_length:
+                budget_tokens = max(
+                    128,
+                    int(context_length) - int(reserved_output_tokens or 256),
+                )
+        except Exception:
+            budget_tokens = None
+        budget_chars = (
+            budget_tokens * chars_per_token if budget_tokens else None
         )
-        return (
-            prompt,
-            1,
-            (hashlib.sha256(system_prompt.encode("utf-8")).hexdigest()[:16]
-             if system_prompt else None),
+        parts: list[str] = []
+        parts.append("<|start|>system<|message|>" + system_msg + "<|end|>")
+        parts.append(
+            "<|start|>developer<|message|>" + dev_block + "<|end|>"
         )
+    # Append prior history (excluding final assistant tag)
+    # oldest -> newest
+        history = session_messages or []
+    # Ensure last message is current user prompt if history provided
+        # We'll reconstruct all but ensure we end with assistant tag open
+        for role, content in history:
+            r = role.strip().lower()
+            if r not in {"user", "assistant"}:
+                continue
+            tag = "user" if r == "user" else "assistant"
+            parts.append(
+                f"<|start|>{tag}<|message|>" + (content or "") + "<|end|>"
+            )
+        # Ensure the latest user prompt is present (in case history was empty)
+        if (
+            not history
+            or history[-1][0] != "user"
+            or history[-1][1] != user_prompt
+        ):
+            parts.append("<|start|>user<|message|>" + user_prompt + "<|end|>")
+    # Assemble and clamp to budget if needed
+    # (trim from the start of history)
+        assembled = "".join(parts) + "<|start|>assistant"
+        if budget_chars and len(assembled) > budget_chars:
+            # Drop earliest history chunks (keep system+dev + latest turns)
+            fixed = parts[:2]  # system + dev
+            dyn = parts[2:]
+            # Drop from the left until within budget
+            for i in range(len(dyn)):
+                candidate = "".join(fixed + dyn[i:]) + "<|start|>assistant"
+                if len(candidate) <= budget_chars:
+                    assembled = candidate
+                    break
+        prompt_tokens = self._approx_tokens(assembled)
+        sp_hash = (
+            hashlib.sha256(system_prompt_text.encode("utf-8")).hexdigest()[:16]
+            if system_prompt_text
+            else None
+        )
+        return assembled, prompt_tokens, sp_hash
 
     def prepare(
         self,
@@ -71,6 +130,7 @@ class PrimaryPipeline(GenerationPipeline):  # pragma: no cover
         model_id: str,
         provider: Any,
         prompt: str,
+        session_messages: list[tuple[str, str]] | None = None,
         reasoning_mode: str | None,
         user_sampling: dict,
         passport_defaults: dict,
@@ -154,8 +214,15 @@ class PrimaryPipeline(GenerationPipeline):  # pragma: no cover
             else ""
         )
         dev_block = base_sp
+        mi = provider.info()
         harmony_prompt, sp_version, sp_hash = self._build_harmony_prompt(
-            base_sp, dev_block, prompt, reasoning_mode
+            system_prompt_text=base_sp,
+            dev_block_text=dev_block,
+            reasoning_mode=reasoning_mode,
+            session_messages=session_messages,
+            user_prompt=prompt,
+            context_length=getattr(mi, "context_length", None),
+            reserved_output_tokens=effective_max,
         )
         adapter = HarmonyChannelAdapter(getattr(llm_cfg, "postproc", {}))
         ctx = PipelineContext(
@@ -166,7 +233,7 @@ class PrimaryPipeline(GenerationPipeline):  # pragma: no cover
             sampling=sampling_struct,
             adapter=adapter,
             adapter_name="harmony",
-            prompt_tokens=len(harmony_prompt.split()),
+            prompt_tokens=self._approx_tokens(harmony_prompt),
             system_prompt_version=sp_version,
             system_prompt_hash=sp_hash,
             sampling_origin=sampling_origin,
@@ -176,6 +243,8 @@ class PrimaryPipeline(GenerationPipeline):  # pragma: no cover
             requested_max_tokens=requested_max,
             effective_max_tokens=effective_max,
             reasoning_mode=reasoning_mode,
+            system_prompt_text=base_sp,
+            user_prompt=prompt,
         )
     # Mirror sampling struct into convenience fields
     # if not already consistent
@@ -239,17 +308,56 @@ class PrimaryPipeline(GenerationPipeline):  # pragma: no cover
                 produced = True
                 yield ev
             # If adapter produced nothing (e.g., buffering), emit a
-            # minimal delta
+            # minimal delta only if chunk has user-visible text
+            # (strip service tokens)
             if not produced:
-                # Use a small slice to avoid large buffering side-effects
-                text = str(chunk)[:16] if chunk is not None else ""
-                if text:
-                    yield {"type": "delta", "text": text}
+                raw = str(chunk) if chunk is not None else ""
+                # strip Harmony service markers like <|...|>
+                import re as _re
+                vis = _re.sub(r"<\|[^|>]+\|>", "", raw)
+                vis = vis.strip()
+                if vis:
+                    yield {"type": "delta", "text": vis[:16]}
         for ev in adapter.finalize():  # type: ignore[attr-defined]
             yield ev
 
     def finalize(self, ctx: PipelineContext):  # noqa: D401
-        final_text = "".join(ctx.fragments)
+        # Heuristic echo-strip to avoid showing system/user echoes
+        def _strip_echo(sp: str | None, up: str | None, text: str) -> str:
+            if not text:
+                return text
+            sp_norm = (sp or "").strip()
+            up_norm = (up or "").strip()
+            out = text
+            for _ in range(2):
+                if sp_norm and out.lower().startswith(sp_norm.lower()[:120]):
+                    out = out[len(sp_norm):].lstrip()
+                else:
+                    break
+            for _ in range(2):
+                if up_norm and out.lower().startswith(up_norm.lower()):
+                    out = out[len(up_norm):].lstrip()
+                else:
+                    break
+            cleaned_lines = []
+            for ln in out.splitlines():
+                lstrip = ln.strip()
+                if not cleaned_lines and not lstrip:
+                    continue
+                if (
+                    "[REASONING SPLIT]" in lstrip
+                    or lstrip.startswith("[LEVEL]")
+                ):
+                    continue
+                cleaned_lines.append(ln)
+            return "\n".join(cleaned_lines).lstrip()
+
+        joined = "".join(ctx.fragments)
+        final_text = _strip_echo(
+            ctx.system_prompt_text,
+            ctx.user_prompt,
+            joined,
+        )
         sampling_summary = {
             "requested_max_tokens": ctx.requested_max_tokens,
             "effective_max_tokens": ctx.effective_max_tokens,
@@ -257,12 +365,45 @@ class PrimaryPipeline(GenerationPipeline):  # pragma: no cover
             "cap_source": ctx.cap_source,
         }
         stop_reason = ctx.stop_hit and "stop_sequence" or None
+        # Base usage
         usage = {
             "prompt_tokens": ctx.prompt_tokens,
             "output_tokens": ctx.output_tokens,
             "latency_ms": ctx.latency_ms,
             "decode_tps": ctx.decode_tps,
         }
+        # Optional context usage (approx): prompt+output vs model context_length
+        try:
+            _ctx_total = getattr(ctx.provider.info(), "context_length", None)
+        except Exception:  # noqa: BLE001
+            _ctx_total = None
+        if _ctx_total:
+            try:
+                _used = (ctx.prompt_tokens or 0) + (ctx.output_tokens or 0)
+                usage.update(
+                    {
+                        "context_used_tokens": _used,
+                        "context_total_tokens": _ctx_total,
+                        "context_used_pct": (
+                            (_used / float(_ctx_total)) if _ctx_total else None
+                        ),
+                    }
+                )
+            except Exception:  # noqa: BLE001
+                pass
+        # Optional reasoning stats passthrough for SSE usage convenience
+        if ctx.reasoning_stats:
+            usage.update(
+                {
+                    "reasoning_tokens": ctx.reasoning_stats.get(
+                        "reasoning_tokens"
+                    ),
+                    "final_tokens": ctx.reasoning_stats.get("final_tokens"),
+                    "reasoning_ratio": ctx.reasoning_stats.get(
+                        "reasoning_ratio"
+                    ),
+                }
+            )
         usage = {k: v for k, v in usage.items() if v is not None}
         result_summary = {"sampling": sampling_summary}
         if ctx.reasoning_stats:

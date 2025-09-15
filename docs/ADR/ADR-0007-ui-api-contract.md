@@ -28,7 +28,7 @@ Reasoning preset application logged via ReasoningPresetApplied event; not a sepa
 
 Session model: in-memory store {session_id -> deque[Message]}; Message {role, content, ts}. Limit: 50 messages; TTL 60m idle. No persistence.
 
-Feature flag ui_mode controlled by ENV MIA__UI_MODE; not persisted in config registry (operational flag). Admin mode unlocks additional panels; safe toggle showAdvanced (local only) can further hide optional panels.
+Feature flag ui_mode controlled by ENV MIA_UI_MODE (non-config operational flag); not persisted in config registry. Admin mode unlocks additional panels; safe toggle showAdvanced (local only) can further hide optional panels.
 
 Metrics additions (names tentative):
 

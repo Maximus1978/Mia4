@@ -1,9 +1,11 @@
 @echo off
 setlocal ENABLEDELAYEDEXPANSION
+echo [TRACE] enter: run_all.bat
 REM ===== MIA4 Unified Launcher =====
 REM Usage: run_all.bat [user|admin]  (env MIA_LAUNCH_TEST=1 for headless probe mode)
 
-cd /d "%~dp0..\.." || (echo [ERROR] cd repo root failed & exit /b 1)
+cd /d "%~dp0..\.." || (echo [ERROR] cd repo root failed & goto LAUNCH_END_ERR)
+echo [TRACE] cwd=%CD%
 set MODE=%1
 if "%MODE%"=="" set MODE=user
 REM UI mode now uses non-config env var MIA_UI_MODE to avoid config schema extra keys
@@ -20,9 +22,20 @@ set VENV_PY=%VENV_DIR%\Scripts\python.exe
 set VENV_PIP=%VENV_DIR%\Scripts\pip.exe
 REM sanitize any accidental embedded quotes
 set "VENV_PY=%VENV_PY:"=%"
-if not exist %VENV_DIR% (echo [INFO] Creating venv & python -m venv %VENV_DIR% >nul 2>&1)
-if not exist %VENV_PY% (echo [ERROR] Missing %VENV_PY% & exit /b 1)
-"%VENV_PIP%" show fastapi >nul 2>&1 || (echo [INFO] Installing backend deps & "%VENV_PIP%" install -q -r requirements.txt || (echo [ERROR] pip failed & exit /b 1))
+if not exist %VENV_DIR% (
+  echo [INFO] Creating venv
+  python -m venv %VENV_DIR% >nul 2>&1
+)
+if not exist %VENV_PY% (
+  echo [ERROR] Missing %VENV_PY%
+  goto LAUNCH_END_ERR
+)
+rem Robust deps probe without complex || nesting (less parser pitfalls)
+"%VENV_PIP%" show fastapi >nul 2>&1
+if errorlevel 1 (
+  echo [INFO] Installing backend deps
+  "%VENV_PIP%" install -q -r requirements.txt || (echo [ERROR] pip failed & goto LAUNCH_END_ERR)
+)
 set ACTUAL_PY=%CD%\%VENV_PY%
 echo [INFO] Python=%ACTUAL_PY% MODE=%MODE% UI_MODE=%MIA_UI_MODE% TEST=%MIA_LAUNCH_TEST%
 set PYTHONPATH=src
@@ -35,7 +48,41 @@ set PYTHONIOENCODING=UTF-8
 set TMP_LAUNCH=.launch_tmp
 if not exist %TMP_LAUNCH% mkdir %TMP_LAUNCH% >nul 2>&1
 
+REM --- UI static prebuild (if requested) BEFORE backend start ---
+echo [TRACE] prebuild-ui: begin (MIA_UI_STATIC=%MIA_UI_STATIC%)
+REM Default to static build to ensure UI is served by backend on :8000
+if "%MIA_UI_STATIC%"=="" set MIA_UI_STATIC=1
+if "%MIA_UI_STATIC%"=="1" (
+  if exist chatgpt-design-app (
+    pushd chatgpt-design-app
+    where npm >nul 2>&1 || (echo [ERROR] npm not found in PATH. Install Node.js and retry. & popd)
+    if not exist node_modules (
+      echo [INFO] Running npm install ^(first time^)
+      call npm install > ..\%TMP_LAUNCH%\npm-install.log 2>&1 || (echo [ERROR] npm install failed. See ..\%TMP_LAUNCH%\npm-install.log & popd)
+      if errorlevel 1 goto START_BACKEND
+      echo [INFO] npm install completed.
+    ) else (
+      echo [INFO] node_modules present ^(skip install^).
+    )
+    for /f "delims=" %%P in ('where npm') do set NPM_EXE=%%P
+    echo [INFO] Building static UI ^(pre-backend^)
+    call "%NPM_EXE%" run build > ..\%TMP_LAUNCH%\ui-build.log 2>&1
+    if errorlevel 1 (
+      echo [ERROR] UI build failed. See ..\%TMP_LAUNCH%\ui-build.log
+      popd
+    ) else (
+      echo [INFO] Static build complete ^(will be served by backend on :8000^)
+      set UI_MODE_STATIC=1
+      popd
+    )
+  ) else (
+    echo [WARN] UI folder missing ^(skip build^)
+  )
+)
+
+:START_BACKEND
 REM --- Start backend (non-blocking, supervise optional) ---
+echo [TRACE] backend: start
 set BACKEND_LOG=%TMP_LAUNCH%\backend.log
 if "%MIA_BACKEND_STAY%"=="" set MIA_BACKEND_STAY=1
 if "%MIA_BACKEND_STAY%"=="0" goto BACKEND_SINGLE
@@ -45,19 +92,26 @@ echo [INFO] Backend supervise loop enabled (MIA_BACKEND_STAY=%MIA_BACKEND_STAY%)
   echo set PYTHONPATH=%PYTHONPATH%
   echo :LOOP
   echo echo [BACKEND] starting ^>^> "%BACKEND_LOG%"
-  echo %VENV_PY% -m uvicorn mia4.api.app:app --host 127.0.0.1 --port 8000 --no-access-log ^>^> "%BACKEND_LOG%" 2^>^&1
+  echo call "%VENV_PY%" -m uvicorn mia4.api.app:app --host 127.0.0.1 --port 8000 --no-access-log ^>^> "%BACKEND_LOG%" 2^>^&1
   echo echo [BACKEND] exited %%errorlevel%% ^>^> "%BACKEND_LOG%"
   echo timeout /t 2 ^>nul
   echo goto LOOP
 ) > "%TMP_LAUNCH%\backend_loop.cmd"
-start "MIA Backend" cmd /c "%TMP_LAUNCH%\backend_loop.cmd"
+start "MIA Backend" cmd /k "%TMP_LAUNCH%\backend_loop.cmd"
 goto BACKEND_STARTED
 :BACKEND_SINGLE
 echo [INFO] Backend supervise disabled.
-start "MIA Backend" cmd /c "@echo off & set PYTHONPATH=%PYTHONPATH% & echo [BACKEND] starting > \"%BACKEND_LOG%\" & \"%VENV_PY%\" -m uvicorn mia4.api.app:app --host 127.0.0.1 --port 8000 --no-access-log >> \"%BACKEND_LOG%\" 2>&1"
+(
+  echo @echo off
+  echo set PYTHONPATH=%PYTHONPATH%
+  echo echo [BACKEND] starting ^>^> "%BACKEND_LOG%"
+  echo call "%VENV_PY%" -m uvicorn mia4.api.app:app --host 127.0.0.1 --port 8000 --no-access-log ^>^> "%BACKEND_LOG%" 2^>^&1
+) > "%TMP_LAUNCH%\backend_once.cmd"
+start "MIA Backend" cmd /k "%TMP_LAUNCH%\backend_once.cmd"
 :BACKEND_STARTED
 
 REM --- Wait health (5s) ---
+echo [TRACE] health: wait
 set /a TRY=0
 echo import urllib.request,sys> %TMP_LAUNCH%\_health.py
 echo try:>> %TMP_LAUNCH%\_health.py
@@ -67,7 +121,13 @@ echo except Exception: sys.exit(1)>> %TMP_LAUNCH%\_health.py
 :WAIT_HEALTH
 "%VENV_PY%" %TMP_LAUNCH%\_health.py >nul 2>&1 && goto HEALTH_OK
 set /a TRY+=1
-if %TRY% GEQ 20 (echo [WARN] Health not confirmed; dumping backend log & type %BACKEND_LOG% & echo [DEBUG] Installed packages: & "%VENV_PIP%" list ^| findstr /R /C:"fastapi" /C:"uvicorn" & goto AFTER_HEALTH)
+if %TRY% GEQ 20 (
+  echo [WARN] Health not confirmed; dumping backend log
+  type %BACKEND_LOG%
+  echo [DEBUG] Installed packages:
+  "%VENV_PIP%" list ^| findstr /R /C:"fastapi" /C:"uvicorn"
+  goto AFTER_HEALTH
+)
 ping -n 2 127.0.0.1 >nul
 goto WAIT_HEALTH
 :HEALTH_OK
@@ -76,8 +136,10 @@ echo [INFO] Backend health OK.
 
 if "%MIA_LAUNCH_TEST%"=="1" goto TEST_MODE
 
-REM --- UI mode (dev or static) ---
-REM MIA_UI_STATIC=1 => build once and serve via backend static mount (port 8000)
+REM --- UI open (dev when requested; static already prebuilt) ---
+echo [TRACE] ui-open: begin static=%UI_MODE_STATIC%
+if "%UI_MODE_STATIC%"=="1" goto OPEN_BROWSER
+REM Dev server path
 REM Allow overriding UI dev server port/host & browser via env:
 REM   MIA_UI_PORT (default 3000)
 REM   MIA_UI_HOST (default localhost)
@@ -95,9 +157,6 @@ if not exist node_modules (
   echo [INFO] node_modules present ^(skip install^).
 )
 for /f "delims=" %%P in ('where npm') do set NPM_EXE=%%P
-echo [DEBUG] MIA_UI_STATIC=%MIA_UI_STATIC%
-if "%MIA_UI_STATIC%"=="1" goto STATIC_BUILD
-REM --- Dev server path ---
 set UI_LOG=%CD%\..\%TMP_LAUNCH%\ui.log
 echo [INFO] Using NPM=%NPM_EXE%
 echo [INFO] UI log: %UI_LOG%
@@ -110,19 +169,6 @@ echo [INFO] UI log: %UI_LOG%
 start "MIA UI" cmd /c ..\%TMP_LAUNCH%\_ui_start.cmd
 popd
 goto POST_UI_LAUNCH
-
-:STATIC_BUILD
-echo [INFO] Building static UI (MIA_UI_STATIC=1)...
-call "%NPM_EXE%" run build > ..\%TMP_LAUNCH%\ui-build.log 2>&1
-if errorlevel 1 (
-  echo [ERROR] UI build failed. See ..\%TMP_LAUNCH%\ui-build.log
-  popd
-  goto AFTER_UI
-)
-echo [INFO] Static build complete (served by backend).
-set UI_MODE_STATIC=1
-popd
-goto OPEN_BROWSER
 
 :POST_UI_LAUNCH
 
@@ -138,7 +184,23 @@ echo sys.exit(0 if ok else 1)>> %TMP_LAUNCH%\_uiwait.py
 "%VENV_PY%" %TMP_LAUNCH%\_uiwait.py >nul 2>&1 && goto UI_OK
 findstr /C:"dev server running at" "%UI_LOG%" >nul 2>&1 && goto UI_FROM_LOG
 set /a W+=1
-if %W% GEQ 60 (echo [WARN] UI not up after %W%s & echo [DEBUG] --- UI LOG START --- & type %UI_LOG% & echo [DEBUG] --- UI LOG END --- & goto OPEN_BROWSER)
+if %W% GEQ 60 (
+  echo [WARN] UI not up after %W%s (dev). Falling back to static build...
+  echo [DEBUG] --- UI LOG START ---
+  type %UI_LOG%
+  echo [DEBUG] --- UI LOG END ---
+  pushd chatgpt-design-app
+  call "%NPM_EXE%" run build > ..\%TMP_LAUNCH%\ui-build.log 2>&1
+  if errorlevel 1 (
+    echo [ERROR] UI static build failed. See ..\%TMP_LAUNCH%\ui-build.log
+    popd
+    goto OPEN_BROWSER
+  )
+  echo [INFO] Static build complete (fallback). Serving via backend on :8000
+  set UI_MODE_STATIC=1
+  popd
+  goto OPEN_BROWSER
+)
 ping -n 2 127.0.0.1 >nul
 goto WAIT_UI
 :UI_OK
@@ -189,7 +251,7 @@ if "%MIA_NO_BROWSER%"=="1" (
   )
 )
 echo [INFO] Launch complete.
-goto END
+goto LAUNCH_END_OK
 
 :AFTER_UI
 
@@ -224,7 +286,27 @@ if exist chatgpt-design-app (
 ) else (echo [WARN] UI folder missing (skipped build))
 echo [INFO] TEST MODE success.
 
-:END
+:LAUNCH_END_OK
+echo [TRACE] end: success
+if "%MIA_LAUNCH_STAY%"=="" set MIA_LAUNCH_STAY=1
+if "%MIA_LAUNCH_STAY%"=="1" (
+  echo.
+  echo [INFO] Launcher done. Press any key to close this window.
+  pause >nul
+)
+goto END_ALL
+
+:LAUNCH_END_ERR
+echo [TRACE] end: error
+set EXITCODE=1
+if "%MIA_LAUNCH_STAY%"=="" set MIA_LAUNCH_STAY=1
+if "%MIA_LAUNCH_STAY%"=="1" (
+  echo.
+  echo [ERROR] Launch failed. Press any key to close this window.
+  pause >nul
+)
+
+:END_ALL
 REM (Optional) cleanup temp scripts
 REM rmdir /s /q %TMP_LAUNCH% >nul 2>&1
 endlocal

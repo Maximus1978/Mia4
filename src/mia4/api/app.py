@@ -16,6 +16,7 @@ from pathlib import Path
 import yaml
 from mia4.api.routes.generate import router as generate_router
 from core import metrics
+from core.config import get_config
 import time
 
 
@@ -47,6 +48,19 @@ def create_app() -> FastAPI:
     def config():  # noqa: D401
         ui_mode = os.getenv("MIA_UI_MODE", "user")
         return {"ui_mode": ui_mode}
+
+    @app.get("/presets")
+    def presets():  # noqa: D401
+        """Expose reasoning presets for UI alignment (read-only)."""
+        try:
+            cfg = get_config()
+            presets = getattr(cfg.llm, "reasoning_presets", {}) or {}
+            # Ensure plain dict
+            if hasattr(presets, "dict"):
+                presets = presets.dict()  # type: ignore[attr-defined]
+            return {"reasoning_presets": presets}
+        except Exception:  # noqa: BLE001
+            return {"reasoning_presets": {}}
 
     def _load_passport(model_id: str) -> dict | None:
         """Attempt to load model passport file (best-effort)."""

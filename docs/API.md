@@ -17,7 +17,23 @@ Response: `{ "status": "ok" }`
 
 ## GET /config
 
-Response: `{ "ui_mode": "admin"|"user" }`
+Response: `{ "ui_mode": "admin"|"user" }` (controlled by env `MIA_UI_MODE`, not a config key)
+
+## GET /presets
+
+Expose reasoning presets for UI alignment.
+
+Response:
+
+```json
+{
+  "reasoning_presets": {
+    "low": { "temperature": 0.6, "top_p": 0.9, "reasoning_max_tokens": 128 },
+    "medium": { "temperature": 0.7, "top_p": 0.92, "reasoning_max_tokens": 256 },
+    "high": { "temperature": 0.85, "top_p": 0.95, "reasoning_max_tokens": 512 }
+  }
+}
+```
 
 ## GET /models
 
@@ -88,7 +104,7 @@ Mandatory / current:
 
 - `event: token` data: `{ seq:int, text:str, tokens_out:int, request_id, model_id }` (final channel user‑visible deltas)
 - `event: analysis` data: `{ request_id, model_id, text:str }` (Harmony reasoning channel; NOT persisted; may be suppressed in minimal mode)
-- `event: usage` data: `{ request_id, model_id, prompt_tokens:int, output_tokens:int, latency_ms:int, decode_tps:float, reasoning_tokens:int?, final_tokens:int?, reasoning_ratio:float? }`
+- `event: usage` data: `{ request_id, model_id, prompt_tokens:int, output_tokens:int, latency_ms:int, decode_tps:float, context_used_tokens:int?, context_total_tokens:int?, context_used_pct:float?, reasoning_tokens:int?, final_tokens:int?, reasoning_ratio:float? }`
 - `event: error` data: `{ request_id, model_id, code, error_type, message }`
 - `event: end` data: `{ request_id, status:"ok"|"error" }`
 
@@ -162,8 +178,8 @@ ReasoningPresetApplied emitted to internal eventbus when reasoning_preset suppli
 
 Notes:
 
-- Session history stored in-memory (TTL 60m, max 50 msgs).
-- prompt_tokens is approximate (whitespace split placeholder).
+- Session history stored in-memory (TTL 60m, max 50 msgs). Prompt is constructed with a sliding window (oldest messages dropped to respect model context and reserved output budget).
+- prompt_tokens and context_used_* are approximate (whitespace split heuristic).
 - decode_tps = output_tokens / (latency_ms/1000).
 
 Test-mode aids (MIA_TEST_MODE=1 only):

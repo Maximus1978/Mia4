@@ -252,6 +252,10 @@ def generate(req: GenerateRequest):  # noqa: D401
         model_id=model_id,
         provider=provider,
         prompt=req.prompt,
+        session_messages=[
+            (m.role, m.content)
+            for m in store.history(session_id)
+        ],
         reasoning_mode=effective_reasoning_mode,
         user_sampling=base_kwargs,  # already merged passport/preset/user
         passport_defaults=passport_defaults,
@@ -693,37 +697,40 @@ def generate(req: GenerateRequest):  # noqa: D401
                 else 0.0
             )
             ctx.decode_tps = decode_tps
-            pipeline.finalize(ctx)
+            res = pipeline.finalize(ctx)
             metrics.observe(
                 "generation_latency_ms", latency_ms, {"model": model_id}
             )
             metrics.observe(
                 "generation_decode_tps", decode_tps, {"model": model_id}
             )
+            # SSE usage strictly from pipeline result (single source)
             usage_payload = {
                 "request_id": request_id,
                 "model_id": model_id,
-                "prompt_tokens": prompt_tokens,
-                "output_tokens": tokens_out,
-                "latency_ms": latency_ms,
-                "decode_tps": decode_tps,
-                "cap_applied": bool(cap_applied),
-                "effective_max_tokens": effective_max_tokens,
+                **(res.usage or {}),
             }
-            if ctx.reasoning_stats:
-                usage_payload.update(
-                    {
-                        "reasoning_tokens": ctx.reasoning_stats.get(
-                            "reasoning_tokens"
-                        ),
-                        "final_tokens": ctx.reasoning_stats.get(
-                            "final_tokens"
-                        ),
-                        "reasoning_ratio": ctx.reasoning_stats.get(
-                            "reasoning_ratio"
-                        ),
-                    }
-                )
+            # Include sampling cap flags for UI from sampling_summary
+            try:
+                ss = res.sampling_summary or {}
+                if ss:
+                    if "cap_applied" in ss:
+                        usage_payload["cap_applied"] = bool(
+                            ss.get("cap_applied")
+                        )
+                    if "effective_max_tokens" in ss:
+                        usage_payload["effective_max_tokens"] = (
+                            ss.get("effective_max_tokens")
+                        )
+                    else:
+                        if "effective_max_tokens" not in usage_payload:
+                            # ctx fallback (should be redundant)
+                            usage_payload["effective_max_tokens"] = (
+                                effective_max_tokens
+                            )
+            except Exception:  # noqa: BLE001
+                # fallback to ctx-derived tokens already set above if needed
+                pass
             yield format_event("usage", json.dumps(usage_payload))
             if reasoning_text:
                 yield format_event(
@@ -737,6 +744,8 @@ def generate(req: GenerateRequest):  # noqa: D401
                         }
                     ),
                 )
+            # prefer pipeline's final_text (echo-stripped)
+            final_text = res.final_text or final_text
             if final_text:
                 try:
                     store.add(session_id, "assistant", final_text)

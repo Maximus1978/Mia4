@@ -1,8 +1,10 @@
 @echo off
 setlocal ENABLEDELAYEDEXPANSION
 REM Admin launch: enables verbose logging, admin UI mode, debug features.
-set MIA__UI_MODE=admin
-set MIA__LOG_LEVEL=DEBUG
+REM Use non-config UI flag (single underscore) to avoid config schema injection.
+set MIA_UI_MODE=admin
+REM Use nested logging level under allowed root 'logging'.
+set MIA__logging__level=debug
 set MIA__EVENTBUS_TRACE=0
 REM Optional: preload model to reduce first-token latency.
 REM You can set MIA__PRELOAD_PRIMARY=1 to force warm load (future flag placeholder).
