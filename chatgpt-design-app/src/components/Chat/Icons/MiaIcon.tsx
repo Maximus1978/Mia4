@@ -1,6 +1,8 @@
 import React from 'react';
 
-const MiaIcon: React.FC = () => {
+export interface MiaIconProps { className?: string }
+
+const MiaIcon: React.FC<MiaIconProps> = ({ className }) => {
     return (
         <svg
             xmlns="http://www.w3.org/2000/svg"
@@ -12,7 +14,7 @@ const MiaIcon: React.FC = () => {
             strokeWidth="2"
             strokeLinecap="round"
             strokeLinejoin="round"
-            className="mia-icon"
+            className={className || 'mia-icon'}
         >
             <circle cx="12" cy="12" r="10" />
             <path d="M12 6v6l4 2" />

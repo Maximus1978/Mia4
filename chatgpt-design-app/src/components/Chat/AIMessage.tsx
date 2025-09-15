@@ -1,5 +1,5 @@
 import React from 'react';
-import MiaIcon from './Icons/MiaIcon';
+import MiaIcon, { MiaIconProps } from './Icons/MiaIcon';
 
 interface AIMessageProps { content: string }
 

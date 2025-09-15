@@ -388,6 +388,47 @@ def generate(req: GenerateRequest):  # noqa: D401
                         time.sleep(_dev_delay_ms / 1000.0)
                 except Exception:  # noqa: BLE001
                     pass
+            # Emit non-blocking warning about passport/config mismatch
+            # (UI toast)
+            try:
+                primary_limit = None
+                try:
+                    llm_primary = getattr(get_config().llm, "primary", None)
+                    if llm_primary is not None:
+                        primary_limit = getattr(
+                            llm_primary, "max_output_tokens", None
+                        )
+                except Exception:  # noqa: BLE001
+                    primary_limit = None
+                passport_max = None
+                try:
+                    passport_max = (
+                        passport_defaults.get("max_output_tokens")
+                        if isinstance(passport_defaults, dict)
+                        else None
+                    )
+                except Exception:  # noqa: BLE001
+                    passport_max = None
+                if (
+                    isinstance(passport_max, (int, float))
+                    and isinstance(primary_limit, (int, float))
+                    and int(passport_max) != int(primary_limit)
+                ):
+                    yield format_event(
+                        "warning",
+                        json.dumps(
+                            {
+                                "event": "ModelPassportMismatch",
+                                "request_id": request_id,
+                                "model_id": model_id,
+                                "field": "max_output_tokens",
+                                "passport_value": int(passport_max),
+                                "config_value": int(primary_limit),
+                            }
+                        ),
+                    )
+            except Exception:  # noqa: BLE001
+                pass
             # Early quick abort check loop (allow client to signal abort)
             for _spin in range(50):  # ~100ms window
                 if abort_registry.is_aborted(request_id):

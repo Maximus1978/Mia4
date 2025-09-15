@@ -5,7 +5,7 @@ interface ThemeContextType {
     setTheme: (theme: string) => void;
 }
 
-const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
+export const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
 export const ThemeProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
     const [theme, setTheme] = useState<string>('light'); // Default theme

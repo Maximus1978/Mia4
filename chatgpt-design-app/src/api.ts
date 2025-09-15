@@ -73,6 +73,7 @@ export interface StreamCallbacks {
   onToken?: (ev: TokenEvent) => void;
   onUsage?: (ev: UsageEvent) => void;
   onReasoning?: (ev: ReasoningEvent) => void;
+  onWarning?: (ev: any) => void;
   onError?: (err: { code: string; message: string }) => void; // code = error_type
   onEnd?: (status: string) => void;
 }
@@ -145,6 +146,7 @@ export function streamGenerate(params: { session_id: string; model: string; prom
               break;
             }
             case 'usage': cb.onUsage?.(obj as UsageEvent); break;
+            case 'warning': cb.onWarning?.(obj); break;
             case 'error': cb.onError?.({ code: obj.code || obj.error_type || 'error', message: obj.message }); break;
             case 'end': cb.onEnd?.(obj.status); break;
           }

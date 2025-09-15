@@ -20,6 +20,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ model, settings }: ChatWindowPr
     const [error, setError] = useState<{ code: string; message: string } | null>(null);
     const [latestReasoning, setLatestReasoning] = useState<string | null>(null);
     const [showReasoning, setShowReasoning] = useState<boolean>(false);
+    const [passportWarn, setPassportWarn] = useState<{ field: string; passport: number; config: number } | null>(null);
     const [e2eMs, setE2eMs] = useState<number | null>(null);
     const startTsRef = useRef<number | null>(null);
     const [contextLen, setContextLen] = useState<number | null>(null);
@@ -88,6 +89,13 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ model, settings }: ChatWindowPr
                 setShowReasoning(true);
             },
                 onUsage: (u: UsageEvent) => setLastUsage(u),
+            onWarning: (w: any) => {
+                if (w && w.event === 'ModelPassportMismatch') {
+                    setPassportWarn({ field: w.field, passport: w.passport_value, config: w.config_value });
+                    // Auto-hide after a short time
+                    setTimeout(() => setPassportWarn(null), 5000);
+                }
+            },
         onError: (err) => {
                 setStreaming(false);
             setError({ code: err.code, message: err.message });
@@ -131,6 +139,11 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ model, settings }: ChatWindowPr
             </div>
             <FeedbackButtons />
             <InputBar onSendMessage={handleSendMessage} disabled={!model || streaming} />
+            {passportWarn && (
+                <div className="toast warn">
+                    Warning: ModelPassportMismatch on {passportWarn.field}. Passport={passportWarn.passport} vs Config={passportWarn.config}
+                </div>
+            )}
             {streaming && <div className="stream-indicator">Streaming... <button className="cancel-btn" onClick={handleCancel}>Cancel</button></div>}
                 {lastUsage && (
                     <div className="perf-panel">

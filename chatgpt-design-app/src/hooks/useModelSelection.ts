@@ -9,7 +9,7 @@ const models = [
 const useModelSelection = () => {
     const [selectedModel, setSelectedModel] = useState(models[0].id);
 
-    const selectModel = (modelId) => {
+    const selectModel = (modelId: string) => {
         if (models.some(model => model.id === modelId)) {
             setSelectedModel(modelId);
         }
