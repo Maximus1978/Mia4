@@ -1,0 +1,8 @@
+{
+  // Allow long lines in generated docs and ADRs
+  "MD013": false,
+  "MD033": false,
+  "ignores": [
+    "docs/ТЗ/Generated-Config.md"
+  ]
+}
