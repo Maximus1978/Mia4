@@ -16,6 +16,8 @@ REM Start backend API (assumes module mia4.api.app:main will exist)
 start "MIA Backend" cmd /c "python -m mia4.api.app"
 
 REM Start frontend (Vite dev server)
-if exist chatgpt-design-app (pushd chatgpt-design-app & start "MIA UI" cmd /c "npm run dev" & popd) else (echo [WARN] chatgpt-design-app folder not found)
+if exist chatgpt-design-app (pushd chatgpt-design-app & start "MIA UI" cmd /c "npm run dev -- --open --host --port 3000" & popd) else (echo [WARN] chatgpt-design-app folder not found)
+REM Append ?dev=1 hint: user will see dev features once browser opened manually or via run_all.
+echo [INFO] After UI starts, open http://localhost:3000/?dev=1 to enable dev mode automatically.
 
 endlocal

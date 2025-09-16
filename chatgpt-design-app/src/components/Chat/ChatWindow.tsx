@@ -24,6 +24,17 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ model, settings }: ChatWindowPr
     const [e2eMs, setE2eMs] = useState<number | null>(null);
     const startTsRef = useRef<number | null>(null);
     const [contextLen, setContextLen] = useState<number | null>(null);
+    // Auto-enable dev mode if ?dev=1 in URL and flag not yet set
+    useEffect(() => {
+        try {
+            if (typeof window !== 'undefined') {
+                const p = new URLSearchParams(window.location.search);
+                if (p.get('dev') === '1' && !localStorage.getItem('mia.dev')) {
+                    localStorage.setItem('mia.dev', '1');
+                }
+            }
+        } catch { /* ignore */ }
+    }, []);
 
     useEffect(() => {
         let cancelled = false;

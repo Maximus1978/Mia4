@@ -102,6 +102,25 @@ python scripts/fetch_phi.py --model phi-3.5-mini-instruct-q3_k_s --repo microsof
 
 ## Development
 
+### Launcher (.bat) Dev Features
+
+When using `scripts/launch/run_all.bat` or `scripts/launch/admin_run.bat`:
+
+- Admin mode: `run_all.bat admin` sets `MIA_UI_MODE=admin` (verbose logging) and builds static UI by default.
+- To force dev UI server with live reload use `MIA_UI_STATIC=0` before running the script.
+- Dev harness (pre-stream / per-token delay sliders) & extended perf metrics panel become visible when localStorage key `mia.dev` = `1`.
+  - Quick enable: open the UI with `?dev=1` (e.g. `http://localhost:3000/?dev=1`) or toggle "Developer mode" in settings.
+  - The chat window will persist the flag; clear via browser devtools or uncheck the toggle.
+- Reasoning block: last AI message shows a collapsible reasoning pane when the backend emits reasoning frames.
+- Metrics panel shows: latency_ms, decode_tps, prompt/output tokens, context usage %, reasoning tokens and ratio when available.
+
+Troubleshooting:
+ 
+- If no dev controls appear: verify `?dev=1` param or set manually: `localStorage.setItem('mia.dev','1')`.
+- If static build is served but you expected dev server: set `set MIA_UI_STATIC=0` before running `run_all.bat`.
+- Passport mismatch toast appears only when backend detects config vs passport divergence on `max_output_tokens`.
+
+
 Рекомендовано зафиксировать точные версии:
 
 ```powershell
