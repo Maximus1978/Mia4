@@ -22,6 +22,8 @@ from core.events import (
     ToolCallResult,
     emit,
 )
+from core.events import ModelPassportMismatch  # explicit for stream warning
+from core.events import subscribe
 from core.llm.factory import apply_reasoning_overrides, get_model
 from core.llm.pipeline.primary import PrimaryPipeline
 from mia4.api.session_store import store
@@ -48,7 +50,9 @@ class GenerateOverrides(BaseModel):  # noqa: D401
     mirostat: int | None = None
     mirostat_tau: float | None = None
     mirostat_eta: float | None = None
+    n_gpu_layers: int | str | None = None
     generation_timeout_s: float | None = None
+    generation_initial_idle_grace_s: float | None = None
     dev_pre_stream_delay_ms: float | None = None
     dev_per_token_delay_ms: float | None = None
     stop: list[str] | None = None
@@ -69,6 +73,20 @@ def _generation_timeout_s() -> int:
     except Exception:  # noqa: BLE001
         pass
     return 120
+
+
+def _generation_initial_idle_grace_s() -> float:
+    try:
+        cfg = get_config().llm
+        if cfg and getattr(
+            cfg, "generation_initial_idle_grace_s", None
+        ) is not None:
+            raw = getattr(cfg, "generation_initial_idle_grace_s")
+            val = float(raw)
+            return max(0.0, val)
+    except Exception:  # noqa: BLE001
+        pass
+    return 0.0
 
 
 def _record_reasoning_ratio_alert(
@@ -138,6 +156,7 @@ def generate(req: GenerateRequest):  # noqa: D401
 
     # Collect user overrides
     user_sampling: dict[str, object] = {}
+    requested_gpu_layers_override: object | None = None
     if req.overrides:
         for k in (
             "temperature",
@@ -155,6 +174,7 @@ def generate(req: GenerateRequest):  # noqa: D401
             "mirostat",
             "mirostat_tau",
             "mirostat_eta",
+            "n_gpu_layers",
             "stop",
         ):
             v = getattr(req.overrides, k, None)
@@ -164,6 +184,9 @@ def generate(req: GenerateRequest):  # noqa: D401
                 user_sampling["max_tokens"] = v
             elif k == "stop" and isinstance(v, list) and v:
                 user_sampling["stop"] = v
+            elif k == "n_gpu_layers":
+                requested_gpu_layers_override = v
+                user_sampling[k] = v
             else:
                 user_sampling[k] = v
 
@@ -181,6 +204,90 @@ def generate(req: GenerateRequest):  # noqa: D401
         }
         print("PRESTREAM_ERROR", json.dumps(err_payload), "TRACE", tb)
         raise HTTPException(status_code=500, detail=err_payload) from e
+
+    # GPU layer override handling -----------------------------------------
+    gpu_layers_state: dict[str, object] = {}
+    gpu_layers_effective: int | None = None
+    gpu_layers_requested: object | None = None
+    gpu_layers_fallback = False
+    gpu_offload = False
+    warn_events: list[tuple[str, dict[str, object]]] = []
+    fallback_warning_emitted = False
+    setter = getattr(provider, "set_n_gpu_layers", None)
+    getter_effective = getattr(provider, "get_effective_n_gpu_layers", None)
+    getter_requested = getattr(provider, "get_requested_n_gpu_layers", None)
+    if requested_gpu_layers_override is not None:
+        if not callable(setter):
+            raise HTTPException(
+                status_code=400,
+                detail={"error_type": "n_gpu_layers-unsupported"},
+            )
+        try:
+            gpu_layers_state = setter(requested_gpu_layers_override) or {}
+        except ValueError as exc:  # noqa: BLE001
+            raise HTTPException(
+                status_code=400,
+                detail={"error_type": "invalid-n_gpu_layers"},
+            ) from exc
+        except HTTPException:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            err_payload = {
+                "error_type": "gpu-layer-update-failed",
+                "message": str(exc),
+                "requested": requested_gpu_layers_override,
+            }
+            raise HTTPException(status_code=500, detail=err_payload) from exc
+    if gpu_layers_state:
+        eff_val = gpu_layers_state.get("effective")
+        if isinstance(eff_val, (int, float)):
+            gpu_layers_effective = int(eff_val)
+        elif eff_val is None:
+            gpu_layers_effective = None
+        else:
+            # Preserve sentinel values like -1 if provided as str
+            try:
+                gpu_layers_effective = int(eff_val)  # type: ignore[arg-type]
+            except Exception:  # noqa: BLE001
+                gpu_layers_effective = None
+        gpu_layers_requested = gpu_layers_state.get("requested")
+        gpu_layers_fallback = bool(gpu_layers_state.get("fallback"))
+    if callable(getter_effective) and gpu_layers_effective is None:
+        try:
+            gpu_layers_effective = getter_effective()
+        except Exception:  # noqa: BLE001
+            gpu_layers_effective = None
+    if callable(getter_requested) and gpu_layers_requested is None:
+        try:
+            gpu_layers_requested = getter_requested()
+        except Exception:  # noqa: BLE001
+            gpu_layers_requested = None
+    if (
+        gpu_layers_requested is None
+        and requested_gpu_layers_override is not None
+    ):
+        gpu_layers_requested = requested_gpu_layers_override
+    gpu_offload = bool(
+        gpu_layers_effective is not None and gpu_layers_effective > 0
+    )
+    if (
+        gpu_layers_effective in (None, 0)
+        and gpu_layers_requested not in (None, "auto", 0)
+    ):
+        gpu_layers_fallback = True
+    if gpu_layers_fallback:
+        warn_events.append(
+            (
+                "warning",
+                {
+                    "event": "GpuFallback",
+                    "request_id": request_id,
+                    "model_id": model_id,
+                    "requested": gpu_layers_requested,
+                    "effective": gpu_layers_effective,
+                },
+            )
+        )
 
     # Merge sampling layers: passport -> preset -> user
     sampling_origin_layers: list[str] = []
@@ -219,6 +326,11 @@ def generate(req: GenerateRequest):  # noqa: D401
             if k in preset_vals and preset_vals.get(k) != v:
                 overridden_fields.append(k)
             effective_sampling[k] = v
+    if (
+        gpu_layers_requested is not None
+        and "n_gpu_layers" not in effective_sampling
+    ):
+        effective_sampling["n_gpu_layers"] = gpu_layers_requested
 
     # Emit ReasoningPresetApplied after merging to know overridden fields
     if preset_name:
@@ -242,6 +354,8 @@ def generate(req: GenerateRequest):  # noqa: D401
     else:
         sampling_origin = "mixed"
     base_kwargs = dict(effective_sampling)
+    if gpu_layers_requested is not None:
+        base_kwargs["n_gpu_layers"] = gpu_layers_requested
 
     # Cap logic delegated to pipeline.prepare (ADR-0028)
 
@@ -317,6 +431,11 @@ def generate(req: GenerateRequest):  # noqa: D401
         return out
 
     def _iter():  # noqa: D401
+        nonlocal gpu_layers_effective
+        nonlocal gpu_layers_requested
+        nonlocal gpu_offload
+        nonlocal gpu_layers_fallback
+        nonlocal fallback_warning_emitted
         nonlocal abort_started_at
         seq = 0
         tokens_out = 0
@@ -339,8 +458,29 @@ def generate(req: GenerateRequest):  # noqa: D401
             )
             else None
         )
+        initial_grace_override = (
+            req.overrides.generation_initial_idle_grace_s
+            if (
+                req.overrides
+                and (
+                    req.overrides.generation_initial_idle_grace_s
+                    is not None
+                )
+            )
+            else None
+        )
         stop_sequences = base_kwargs.get("stop") or []
         t_start = t0
+        timeout_s = float(timeout_override or _generation_timeout_s())
+        initial_grace_s = float(
+            initial_grace_override
+            if initial_grace_override is not None
+            else _generation_initial_idle_grace_s()
+        )
+        if initial_grace_s < 0:
+            initial_grace_s = 0.0
+        last_activity = t_start
+        prefirst_grace_logged = False
         # Emit an immediate meta frame so clients can obtain request_id early
         if is_test_mode:
             try:
@@ -352,6 +492,13 @@ def generate(req: GenerateRequest):  # noqa: D401
                         "status": "starting",
                     }),
                 )
+            except Exception:  # noqa: BLE001
+                pass
+        for evt_name, payload in warn_events:
+            if payload.get("event") == "GpuFallback":
+                fallback_warning_emitted = True
+            try:
+                yield format_event(evt_name, json.dumps(payload))
             except Exception:  # noqa: BLE001
                 pass
         try:
@@ -440,8 +587,10 @@ def generate(req: GenerateRequest):  # noqa: D401
                     print("DEBUG_ABORT_DETECTED", request_id, "phase", "spin")
                     raise RuntimeError("aborted")
                 time.sleep(0.002)
+            first_token_latency_ms: float | None = None
             for evt in pipeline.stream(ctx):
                 # Abort & timeout checks
+                now = time.time()
                 if abort_registry.is_aborted(request_id):
                     # Try to reuse earlier mark_start timestamp if available
                     if abort_started_at is None:
@@ -457,10 +606,28 @@ def generate(req: GenerateRequest):  # noqa: D401
                             "in-stream",
                         )
                     raise RuntimeError("aborted")
-                if (time.time() - t_start) > (
-                    timeout_override or _generation_timeout_s()
-                ):
-                    raise TimeoutError("generation-timeout")
+                if (now - last_activity) > timeout_s:
+                    idle_span = now - last_activity
+                    if (not first_sent) and initial_grace_s > 0:
+                        total_prefirst = now - t_start
+                        if total_prefirst <= timeout_s + initial_grace_s:
+                            if not prefirst_grace_logged:
+                                prefirst_grace_logged = True
+                                try:
+                                    metrics.inc(
+                                        "generation_timeout_grace_total",
+                                        {"phase": "prefirst"},
+                                    )
+                                except Exception:  # noqa: BLE001
+                                    pass
+                            time.sleep(0.05)
+                            continue
+                    raise TimeoutError(
+                        (
+                            "generation-timeout "
+                            f"idle={idle_span:.3f}s limit={timeout_s:.3f}s"
+                        )
+                    )
                 etype = evt.get("type")
                 if etype == "delta":
                     tok = evt.get("text", "")
@@ -472,6 +639,7 @@ def generate(req: GenerateRequest):  # noqa: D401
                                 if not tok:
                                     break
                     if not tok:
+                        last_activity = now
                         continue
                     tokens_out += 1
                     fragments.append(tok)
@@ -484,9 +652,12 @@ def generate(req: GenerateRequest):  # noqa: D401
                     }
                     seq += 1
                     if not first_sent:
+                        first_token_latency_ms = (
+                            (time.time() - t_start) * 1000.0
+                        )
                         metrics.observe(
                             "generation_first_token_latency_ms",
-                            (time.time() - t_start) * 1000.0,
+                            first_token_latency_ms,
                             {"model": model_id},
                         )
                         first_sent = True
@@ -498,6 +669,7 @@ def generate(req: GenerateRequest):  # noqa: D401
                     except Exception:  # noqa: BLE001
                         pass
                     yield format_event("token", json.dumps(payload))
+                    last_activity = now
                 elif etype == "analysis":
                     atok = evt.get("text", "")
                     if atok:
@@ -518,6 +690,7 @@ def generate(req: GenerateRequest):  # noqa: D401
                                 }
                             ),
                         )
+                    last_activity = now
                 elif etype == "commentary":
                     ctext = evt.get("text", "")
                     if ctext:
@@ -538,9 +711,11 @@ def generate(req: GenerateRequest):  # noqa: D401
                                 }
                             ),
                         )
+                    last_activity = now
                 elif etype == "tool_channel_raw":
                     raw = evt.get("raw", "")
                     if not raw:
+                        last_activity = now
                         continue
                     # Attempt JSON parse & synthetic execution (config-driven)
                     import hashlib as _hashlib
@@ -667,8 +842,17 @@ def generate(req: GenerateRequest):  # noqa: D401
                             }
                         ),
                     )
+                    last_activity = now
                 elif etype == "final":
                     reasoning_text = evt.get("reasoning_text")
+                    # Adapter may provide sanitized final_text (SSOT)
+                    final_text_adapter = evt.get("final_text")
+                    if final_text_adapter:
+                        try:
+                            ctx.fragments = [final_text_adapter]
+                            ctx.sanitized_final_text = final_text_adapter
+                        except Exception:  # noqa: BLE001
+                            pass
                     reasoning_stats = evt.get("stats") or {}
                     reasoning_final_detect_ts = evt.get("final_detect_time")
                     try:
@@ -681,6 +865,9 @@ def generate(req: GenerateRequest):  # noqa: D401
                                 ratio_alert_recorded = True
                     except Exception:  # noqa: BLE001
                         pass
+                    last_activity = now
+                else:
+                    last_activity = now
             # --- finalize ---
             # Edge case: abort signalled after provider exhausted but before
             # finalize section executes (race where abort arrives between
@@ -739,6 +926,74 @@ def generate(req: GenerateRequest):  # noqa: D401
             )
             ctx.decode_tps = decode_tps
             res = pipeline.finalize(ctx)
+            prev_gpu_layers_effective = gpu_layers_effective
+            prev_gpu_layers_requested = gpu_layers_requested
+            try:
+                if callable(getter_effective):
+                    gpu_layers_effective = getter_effective()
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                if callable(getter_requested):
+                    gpu_layers_requested = getter_requested()
+            except Exception:  # noqa: BLE001
+                pass
+            if (
+                gpu_layers_requested is None
+                and requested_gpu_layers_override is not None
+            ):
+                gpu_layers_requested = requested_gpu_layers_override
+            gpu_offload = bool(
+                gpu_layers_effective is not None
+                and gpu_layers_effective > 0
+            )
+            gpu_layers_fallback = bool(
+                gpu_layers_effective in (None, 0)
+                and gpu_layers_requested not in (None, "auto", 0)
+            )
+            change_label = None
+            if prev_gpu_layers_effective != gpu_layers_effective and (
+                prev_gpu_layers_requested != gpu_layers_requested
+            ):
+                change_label = "both"
+            elif prev_gpu_layers_effective != gpu_layers_effective:
+                change_label = "effective"
+            elif prev_gpu_layers_requested != gpu_layers_requested:
+                change_label = "requested"
+            if change_label:
+                try:
+                    metrics.inc(
+                        "gpu_layer_state_sync_total",
+                        {
+                            "change": change_label,
+                            "model": model_id,
+                        },
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+            try:
+                metrics.inc(
+                    "gpu_offload_state_total",
+                    {
+                        "model": model_id,
+                        "offload": "1" if gpu_offload else "0",
+                    },
+                )
+            except Exception:  # noqa: BLE001
+                pass
+            if gpu_layers_fallback and not fallback_warning_emitted:
+                fallback_payload = {
+                    "event": "GpuFallback",
+                    "request_id": request_id,
+                    "model_id": model_id,
+                    "requested": gpu_layers_requested,
+                    "effective": gpu_layers_effective,
+                }
+                try:
+                    yield format_event("warning", json.dumps(fallback_payload))
+                    fallback_warning_emitted = True
+                except Exception:  # noqa: BLE001
+                    pass
             metrics.observe(
                 "generation_latency_ms", latency_ms, {"model": model_id}
             )
@@ -751,6 +1006,19 @@ def generate(req: GenerateRequest):  # noqa: D401
                 "model_id": model_id,
                 **(res.usage or {}),
             }
+            if first_token_latency_ms is not None:
+                usage_payload["first_token_latency_ms"] = int(
+                    first_token_latency_ms
+                )
+            if gpu_layers_effective is not None:
+                usage_payload["n_gpu_layers"] = gpu_layers_effective
+                usage_payload["gpu_offload"] = gpu_offload
+            if gpu_layers_requested is not None:
+                usage_payload["requested_n_gpu_layers"] = (
+                    gpu_layers_requested
+                )
+            if gpu_layers_fallback:
+                usage_payload["gpu_fallback"] = True
             # Include sampling cap flags for UI from sampling_summary
             try:
                 ss = res.sampling_summary or {}
@@ -792,21 +1060,30 @@ def generate(req: GenerateRequest):  # noqa: D401
                     store.add(session_id, "assistant", final_text)
                 except Exception:  # noqa: BLE001
                     pass
-            yield format_event(
-                "final",
-                json.dumps(
-                    {
-                        "request_id": request_id,
-                        "model_id": model_id,
-                        "text": final_text,
-                        "reasoning_text": None,
-                        "stop_reason": stop_hit and "stop_sequence" or None,
-                        "stats": ctx.reasoning_stats,
-                        "cap_applied": bool(cap_applied),
-                        "effective_max_tokens": effective_max_tokens,
-                    }
-                ),
-            )
+            final_payload = {
+                "request_id": request_id,
+                "model_id": model_id,
+                "text": final_text,
+                "reasoning_text": None,
+                "stop_reason": stop_hit and "stop_sequence" or None,
+                "stats": ctx.reasoning_stats,
+                "cap_applied": bool(cap_applied),
+                "effective_max_tokens": effective_max_tokens,
+            }
+            if gpu_layers_effective is not None:
+                final_payload["n_gpu_layers"] = gpu_layers_effective
+                final_payload["gpu_offload"] = gpu_offload
+            if gpu_layers_requested is not None:
+                final_payload["requested_n_gpu_layers"] = (
+                    gpu_layers_requested
+                )
+            if gpu_layers_fallback:
+                final_payload["gpu_fallback"] = True
+            if first_token_latency_ms is not None:
+                final_payload["first_token_latency_ms"] = int(
+                    first_token_latency_ms
+                )
+            yield format_event("final", json.dumps(final_payload))
             # Fallback: if abort arrived late (after finalize path already
             # underway) still record cancel latency metric so tests &
             # observability capture user intent. Treat as user_abort path.
@@ -996,6 +1273,15 @@ def generate(req: GenerateRequest):  # noqa: D401
                     "aborted-by-client" if aborted else str(e)
                 ),
             }
+            if gpu_layers_effective is not None:
+                err_payload["n_gpu_layers"] = gpu_layers_effective
+                err_payload["gpu_offload"] = gpu_offload
+            if gpu_layers_requested is not None:
+                err_payload["requested_n_gpu_layers"] = (
+                    gpu_layers_requested
+                )
+            if gpu_layers_fallback:
+                err_payload["gpu_fallback"] = True
             if tokens_out and fragments:
                 try:
                     store.add(session_id, "assistant", "".join(fragments))
@@ -1015,6 +1301,15 @@ def generate(req: GenerateRequest):  # noqa: D401
                     "latency_ms": latency_ms,
                     "decode_tps": decode_tps,
                 }
+                if gpu_layers_effective is not None:
+                    usage_payload["n_gpu_layers"] = gpu_layers_effective
+                    usage_payload["gpu_offload"] = gpu_offload
+                if gpu_layers_requested is not None:
+                    usage_payload["requested_n_gpu_layers"] = (
+                        gpu_layers_requested
+                    )
+                if gpu_layers_fallback:
+                    usage_payload["gpu_fallback"] = True
                 yield format_event("usage", json.dumps(usage_payload))
             except Exception:  # noqa: BLE001
                 pass
@@ -1165,7 +1460,50 @@ def generate(req: GenerateRequest):  # noqa: D401
                 threading.Timer(0.2, _deferred).start()
 
     try:
-        return StreamingResponse(_iter(), media_type="text/event-stream")
+        mismatch_events: list[ModelPassportMismatch] = []
+
+        def _capture(ev):  # noqa: D401
+            if isinstance(ev, ModelPassportMismatch) and getattr(
+                ev, "model_id", None
+            ) == model_id:
+                mismatch_events.append(ev)
+
+        _unsub = subscribe(_capture)
+
+        def _gen_with_warnings():
+            emitted_warnings = False
+            inner = _iter()
+            for item in inner:
+                if not emitted_warnings and mismatch_events:
+                    for ev in mismatch_events:
+                        payload = {
+                            "event": "ModelPassportMismatch",
+                            "request_id": request_id,
+                            "model_id": ev.model_id,
+                            "field": ev.field,
+                            "passport_value": ev.passport_value,
+                            "config_value": ev.config_value,
+                        }
+                        yield format_event("warning", json.dumps(payload))
+                    emitted_warnings = True
+                yield item
+            if not mismatch_events:
+                return
+            if not emitted_warnings:
+                for ev in mismatch_events:
+                    payload = {
+                        "event": "ModelPassportMismatch",
+                        "request_id": request_id,
+                        "model_id": ev.model_id,
+                        "field": ev.field,
+                        "passport_value": ev.passport_value,
+                        "config_value": ev.config_value,
+                    }
+                    yield format_event("warning", json.dumps(payload))
+
+        return StreamingResponse(
+            _gen_with_warnings(), media_type="text/event-stream"
+        )
     except Exception as e:  # noqa: BLE001
         tb = traceback.format_exc()
         err_payload = {
@@ -1177,6 +1515,11 @@ def generate(req: GenerateRequest):  # noqa: D401
         }
         print("STREAM_INIT_ERROR", json.dumps(err_payload), "TRACE", tb)
         raise HTTPException(status_code=500, detail=err_payload) from e
+    finally:
+        try:  # unsubscribe if defined
+            _unsub()  # type: ignore[name-defined]
+        except Exception:  # noqa: BLE001
+            pass
 
 
 __all__ = ["router"]

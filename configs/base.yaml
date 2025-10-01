@@ -29,6 +29,7 @@ llm:
   load_timeout_ms: 15000
   # Streaming generation timeout (seconds) – UI later will allow override; best perf default.
   generation_timeout_s: 120
+  generation_initial_idle_grace_s: 45
   # Fake mode (DummyProvider) for dev/tests. Managed via config (no scattered env). UI planned.
   fake: false
   reasoning_presets:

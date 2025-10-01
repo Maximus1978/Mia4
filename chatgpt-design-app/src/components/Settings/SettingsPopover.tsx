@@ -6,6 +6,7 @@ export interface GenerationSettings {
   top_p: number;
   max_output_tokens: number;
   persona: string;
+  n_gpu_layers: number | 'auto';
   // Optional dev harness controls
   dev_pre_stream_delay_ms?: number;
   dev_per_token_delay_ms?: number;
@@ -70,6 +71,13 @@ const SettingsPopover: React.FC<Props> = ({ open, onClose, defaults, value, onCh
   const determinist = local.temperature <= 0.15 && local.top_p <= 0.85;
   const overriddenMax = typeof limits?.max_output_tokens === 'number' ? (local.max_output_tokens !== limits.max_output_tokens) : false;
   const overriddenPersona = (local.persona || '').trim().length > 0;
+  const defaultGpuLayers = defaults?.n_gpu_layers ?? 'auto';
+  const gpuOverridden = local.n_gpu_layers !== defaultGpuLayers;
+  const gpuModeBadge = (() => {
+    if (local.n_gpu_layers === 'auto') return null;
+    if (local.n_gpu_layers === 0) return 'cpu';
+    return `${local.n_gpu_layers}`;
+  })();
 
   return (
     <div className="settings-popover-overlay">
@@ -87,7 +95,12 @@ const SettingsPopover: React.FC<Props> = ({ open, onClose, defaults, value, onCh
               onChange={(e) => {
                 const v = e.target.checked;
                 setDevEnabled(v);
-                try { if (v) localStorage.setItem('mia.dev', '1'); else localStorage.removeItem('mia.dev'); } catch {}
+                try { 
+                  if (v) localStorage.setItem('mia.dev', '1'); 
+                  else localStorage.removeItem('mia.dev'); 
+                  // Notify ChatWindow about dev mode change
+                  window.dispatchEvent(new CustomEvent('mia-dev-change'));
+                } catch {}
               }}
             />
           </div>
@@ -128,6 +141,35 @@ const SettingsPopover: React.FC<Props> = ({ open, onClose, defaults, value, onCh
             )}
             {overriddenMax && <span className="badge" style={{ marginLeft: 8 }}>overridden</span>}
           </div>
+          <div className="form-row">
+            <label>GPU layers</label>
+            <input
+              className="numeric"
+              type="number"
+              min={0}
+              step={1}
+              placeholder="auto"
+              value={local.n_gpu_layers === 'auto' ? '' : local.n_gpu_layers}
+              onChange={(e) => {
+                const raw = e.target.value;
+                if (raw === '' || raw == null) {
+                  setField('n_gpu_layers', 'auto');
+                  return;
+                }
+                const parsed = Number.parseInt(raw, 10);
+                if (Number.isNaN(parsed) || parsed < 0) {
+                  setField('n_gpu_layers', 0);
+                } else {
+                  setField('n_gpu_layers', Math.max(0, parsed));
+                }
+              }}
+            />
+            <button type="button" onClick={() => setField('n_gpu_layers', 'auto')}>auto</button>
+            <button type="button" onClick={() => setField('n_gpu_layers', 0)}>cpu</button>
+            {gpuOverridden && <span className="badge" style={{ marginLeft: 8 }}>overridden</span>}
+            {gpuModeBadge && <span className="badge" style={{ marginLeft: 8 }}>{gpuModeBadge}</span>}
+          </div>
+          <div className="gpu-note">leave blank for auto offload; set 0 to force CPU</div>
           <div className="form-row persona">
             <label>Persona</label>
             <textarea maxLength={1200} value={local.persona} placeholder="Persona (tone, style, role)..." onChange={e => setField('persona', e.target.value)} />
@@ -177,7 +219,7 @@ const SettingsPopover: React.FC<Props> = ({ open, onClose, defaults, value, onCh
           </>
         )}
         <footer>
-          <button onClick={() => setLocal(defaults)}>Default</button>
+          <button onClick={() => setLocal({ ...defaults })}>Default</button>
           <div className="spacer" />
             <button onClick={onClose} className="secondary">Cancel</button>
             <button onClick={() => { onChange(local); onClose(); }} className="primary">Save</button>

@@ -7,20 +7,13 @@ import ModelSelector from './ModelSelector';
 import SettingsPopover, { GenerationSettings } from '../Settings/SettingsPopover';
 import { fetchModels, fetchPresets, ModelInfo } from '../../api';
 
-interface Props { model: string | null; onModelChange: (m: string) => void; settings: GenerationSettings; onSettingsChange: (s: GenerationSettings) => void }
+interface Props { model: string | null; onModelChange: (m: string) => void; settings: GenerationSettings; onSettingsChange: (s: GenerationSettings) => void; defaults: GenerationSettings }
 
-const LeftPanel: React.FC<Props> = ({ model, onModelChange, settings, onSettingsChange }: Props) => {
+const LeftPanel: React.FC<Props> = ({ model, onModelChange, settings, onSettingsChange, defaults }: Props) => {
     const [isOpen, setIsOpen] = useState(true);
     const [showSettings, setShowSettings] = useState(false);
     const [limits, setLimits] = useState<{ max_output_tokens?: number; context_length?: number; reasoning_max_tokens?: number } | undefined>(undefined);
     const [presets, setPresets] = useState<Record<string, { temperature?: number; top_p?: number; reasoning_max_tokens?: number }> | undefined>(undefined);
-    const defaultSettings: GenerationSettings = {
-        reasoningPreset: 'medium',
-        temperature: 0.7,
-        top_p: 0.92,
-        max_output_tokens: 1024,
-        persona: ''
-    };
     useEffect(() => { try { localStorage.setItem('mia.gen.settings', JSON.stringify(settings)); } catch {} }, [settings]);
 
     // Load model limits for the currently selected model to guide UI controls
@@ -84,7 +77,7 @@ const LeftPanel: React.FC<Props> = ({ model, onModelChange, settings, onSettings
                     <SettingsPopover
                         open={showSettings}
                         onClose={() => setShowSettings(false)}
-                        defaults={defaultSettings}
+                        defaults={defaults}
                         value={settings}
                         onChange={onSettingsChange}
                         limits={limits}

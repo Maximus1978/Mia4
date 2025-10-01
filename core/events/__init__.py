@@ -245,6 +245,24 @@ class ToolCallResult(BaseEvent):
     message: str | None = None
 
 
+@dataclass(slots=True)
+class ReasoningSuppressedOrNone(BaseEvent):
+    """No reasoning content emitted.
+
+    Emitted when generation completes without any reasoning tokens:
+    - either because drop_history flag suppresses it, or
+    - model produced zero analysis tokens.
+    reason: no-analysis-channel | drop_history | both
+    request_id: correlation with generation
+    model_id: model used
+    final_tokens: produced final tokens count
+    """
+    request_id: str
+    model_id: str
+    reason: str
+    final_tokens: int
+
+
 _ANY_SUBS: List[EventHandler] = []
 # Generation counter used by tests: each call to reset_listeners_for_tests
 # increments this so already-loaded providers can re-emit ModelLoaded when
@@ -313,6 +331,11 @@ def _metrics_collector(
             payload.get("latency_ms", 0),
             {"tool": payload.get("tool", "unknown")},
         )
+    elif name == "ReasoningSuppressedOrNone":
+        _metrics.inc(
+            "reasoning_none_total",
+            {"reason": payload.get("reason", "unknown")},
+        )
 
 
 _ANY_SUBS.append(_metrics_collector)
@@ -373,6 +396,7 @@ __all__ = [
     "ModelPassportMismatch",
     "ToolCallPlanned",
     "ToolCallResult",
+    "ReasoningSuppressedOrNone",
     "reset_listeners_for_tests",
     "get_event_generation",
 ]

@@ -47,7 +47,70 @@ def create_app() -> FastAPI:
     @app.get("/config")
     def config():  # noqa: D401
         ui_mode = os.getenv("MIA_UI_MODE", "user")
-        return {"ui_mode": ui_mode}
+        ratio_threshold = None
+        primary_payload: dict | None = None
+        generation_timeout_s = None
+        generation_initial_idle_grace_s = None
+        try:
+            cfg = get_config()
+            llm_conf = getattr(cfg, 'llm', None)
+            postproc = (
+                getattr(llm_conf, 'postproc', None) if llm_conf else None
+            )
+            reasoning = None
+            if isinstance(postproc, dict):
+                reasoning = postproc.get('reasoning')
+            elif postproc is not None:
+                reasoning = getattr(postproc, 'reasoning', None)
+            if isinstance(reasoning, dict):
+                ratio_threshold = reasoning.get('ratio_alert_threshold')
+            elif reasoning is not None:
+                ratio_threshold = getattr(
+                    reasoning, 'ratio_alert_threshold', None
+                )
+            if llm_conf is not None:
+                generation_timeout_s = getattr(
+                    llm_conf, 'generation_timeout_s', None
+                )
+                generation_initial_idle_grace_s = getattr(
+                    llm_conf, 'generation_initial_idle_grace_s', None
+                )
+                primary_cfg = getattr(llm_conf, 'primary', None)
+                if primary_cfg is not None:
+                    primary_payload = {
+                        "id": getattr(primary_cfg, 'id', None),
+                        "temperature": getattr(
+                            primary_cfg, 'temperature', None
+                        ),
+                        "top_p": getattr(primary_cfg, 'top_p', None),
+                        "max_output_tokens": getattr(
+                            primary_cfg, 'max_output_tokens', None
+                        ),
+                        "n_gpu_layers": getattr(
+                            primary_cfg, 'n_gpu_layers', None
+                        ),
+                        "n_threads": getattr(primary_cfg, 'n_threads', None),
+                        "n_batch": getattr(primary_cfg, 'n_batch', None),
+                    }
+        except Exception:  # noqa: BLE001
+            ratio_threshold = None
+            primary_payload = None
+            generation_timeout_s = None
+            generation_initial_idle_grace_s = None
+        if ratio_threshold is not None:
+            try:
+                ratio_threshold = float(ratio_threshold)
+            except Exception:  # noqa: BLE001
+                ratio_threshold = None
+        return {
+            "ui_mode": ui_mode,
+            "reasoning_ratio_threshold": ratio_threshold,
+            "generation_timeout_s": generation_timeout_s,
+            "generation_initial_idle_grace_s": (
+                generation_initial_idle_grace_s
+            ),
+            "primary": primary_payload,
+        }
 
     @app.get("/presets")
     def presets():  # noqa: D401
@@ -91,17 +154,11 @@ def create_app() -> FastAPI:
         manifests = load_manifests(repo_root=".")
         allowed_roles = {"primary", "lightweight", "secondary"}
         mgr = get_module_manager()
-        # Best-effort: ensure primary provider is loaded so stub status is
-        # surfaced (lightweight/heavy swap logic already inside manager).
+        # IMPORTANT: Do NOT force-load providers here.
+        # UI frequently calls /models on startup; loading heavy models here
+        # would block or destabilize launch. Only report stub flags for
+        # already-loaded providers (best-effort) without triggering new loads.
         primary_stub_by_id: dict[str, bool] = {}
-        try:  # pragma: no cover - defensive
-            prov_primary = mgr.get_provider_by_role("primary", ".", True)
-            info = prov_primary.info()
-            primary_stub_by_id[info.id] = bool(
-                (info.metadata or {}).get("stub")
-            )
-        except Exception:  # noqa: BLE001
-            pass
         # Collect stub flags for any already-loaded providers without
         # triggering new heavy loads (query manager llm info())
         try:
@@ -111,7 +168,10 @@ def create_app() -> FastAPI:
                 if mid in primary_stub_by_id:
                     continue
                 try:
-                    p = llm_mod.get_provider(mid)  # will not load new
+                    # get_provider(mid) should return only if already loaded;
+                    # if implementation might load, guard by membership
+                    # check above.
+                    p = llm_mod.get_provider(mid)
                     mi = p.info()
                     primary_stub_by_id[mid] = bool(
                         (mi.metadata or {}).get("stub")

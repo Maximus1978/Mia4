@@ -8,7 +8,7 @@ interface UserMessageProps {
 
 const UserMessage: React.FC<UserMessageProps> = ({ content, accentColor = '#4a90e2' }) => {
     return (
-        <div className="user-message" style={{ borderLeft: `4px solid ${accentColor}` }}>
+        <div className="user-message">
             <p>{content}</p>
         </div>
     );

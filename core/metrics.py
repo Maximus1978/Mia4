@@ -20,7 +20,9 @@ Harmony / LLM related metric names (documented for discoverability):
     - commentary_tokens_total{model}                  # (ADR-0024)
     - commentary_retention_mode_total{mode}           # (ADR-0024)
     - commentary_retention_redactions_total           # (ADR-0024)
-    - commentary_retention_override_total{from,to}    # (ADR-0025 extension)
+    - reasoning_leak_total{reason}                    # (ADR-CH-SEP-V2)
+    - channel_merge_anomaly_total{type}               # (ADR-CH-SEP-V2)
+    - fused_marker_sanitizations_total{kind}          # (ADR-0013i addendum)
 
 Helper functions are provided for newly added ADR-backed metrics to reduce
 label spelling drift and ease refactors. They are thin wrappers over ``inc``.
@@ -146,54 +148,67 @@ def inc_commentary_redactions(count: int = 1) -> None:
         inc("commentary_retention_redactions_total", value=count)
 
 
+# ------------------- Channel separation (ADR-CH-SEP-V2) --------------
+def inc_reasoning_leak(reason: str) -> None:
+    """Increment reasoning leak metric.
+
+    reason: classifier for leak source. Suggested values:
+        - analysis_in_final
+        - post_final_analysis
+        - service_marker_in_final
+        - mixed_channel_fragment
+    """
+    if reason:
+        inc("reasoning_leak_total", {"reason": reason})
+
+
+def inc_channel_merge_anomaly(kind: str) -> None:
+    """Increment channel merge anomaly metric.
+
+    kind: classifier for anomaly:
+        - analysis_token_emitted_as_delta
+        - commentary_token_in_final
+        - post_finalize_emission
+    """
+    if kind:
+        inc("channel_merge_anomaly_total", {"type": kind})
+
+
 __all__ += [
     "inc_unexpected_order",
     "inc_commentary_tokens",
     "inc_commentary_retention_mode",
     "inc_commentary_redactions",
-    "inc_tool_commentary_sanitized",
-    "inc_commentary_retention_override",
-    "inc_perf_guard_skipped_regression",
+    "inc_reasoning_leak",
+    "inc_channel_merge_anomaly",
 ]
 
 
-def inc_tool_commentary_sanitized(count: int = 1) -> None:
-    """Increment when tool commentary text is sanitized/filtered.
+def inc_fused_marker_sanitization(kind: str) -> None:
+    """Increment fused marker sanitation counter.
 
-    (ADR-0025 extension)
+    kind: classifier for sanitation path (prefix|residue|other future).
     """
-    if count:
-        inc("tool_commentary_sanitized_total", value=count)
+    if kind:
+        inc("fused_marker_sanitizations_total", {"kind": kind})
 
 
-def inc_commentary_retention_override(from_mode: str, to_mode: str) -> None:
-    """Increment override metric when tool_chain changes retention mode.
-
-    Labels:
-        from: base/original mode
-        to:   applied override mode
-
-    (ADR-0025 extension)
-    """
-    if from_mode and to_mode and from_mode != to_mode:
-        inc(
-            "commentary_retention_override_total",
-            {"from": from_mode, "to": to_mode},
-        )
+__all__ += ["inc_fused_marker_sanitization"]
 
 
+# ------------------- Perf guard helpers (future ADR) -------------------
 def inc_perf_guard_skipped_regression(reason: str, scenario: str) -> None:
-    """Metric: a detected perf regression was skipped (temporary policy).
+    """Track skipped regression classification for perf guard.
 
-    Labels:
-        reason: policy bucket (degenerate|gpu_short|other)
-        scenario: scenario id
-
-    Used during temporary relaxation phase; slated for removal when guard
-    re-tightened (see 2025-09-06 perf guard relaxation changelog).
+    Allows tests to record why a potential regression was ignored
+    (degenerate, gpu_short, etc.) to aid later analysis without failing
+    guardrails.
     """
     if reason and scenario:
         inc(
             "perf_guard_skipped_regression_total",
             {"reason": reason, "scenario": scenario},
         )
+
+
+__all__ += ["inc_perf_guard_skipped_regression"]

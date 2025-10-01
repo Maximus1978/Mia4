@@ -120,6 +120,24 @@ Troubleshooting:
 - If static build is served but you expected dev server: set `set MIA_UI_STATIC=0` before running `run_all.bat`.
 - Passport mismatch toast appears only when backend detects config vs passport divergence on `max_output_tokens`.
 
+### Fast-Path Smoke Mode (`MIA_LAUNCH_SMOKE`)
+
+Для быстрых CI / smoke проверок предусмотрен флаг окружения `MIA_LAUNCH_SMOKE=1` (только Windows батник `run_all.bat`). При его установке:
+
+1. Запускается и проходит health‑проверка backend.
+2. Пропускаются `npm install`, Vite dev server и static build.
+3. Всё равно выводится строка `UI launch URL=...` указывающая на backend (`http://127.0.0.1:8000/`) — контракт для тестов.
+
+Преимущества: существенное сокращение времени в CI и отсутствие требования Node.js для smoke пути. Используется тестом `tests/launcher/test_launcher_smoke.py`.
+
+Пример PowerShell:
+
+```powershell
+$env:MIA_LAUNCH_SMOKE="1"; scripts\launch\run_all.bat dev
+```
+
+Чтобы получить полный UI (live reload) — не задавайте переменную или явно установите `MIA_UI_STATIC=0` (для dev) / `MIA_UI_STATIC=1` (форс статической сборки).
+
 
 Рекомендовано зафиксировать точные версии:
 

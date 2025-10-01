@@ -17,5 +17,6 @@
 .settings-popover button:hover { filter:brightness(1.1); }
 .settings-popover .badge { background:#454b57; padding:2px 6px; border-radius:12px; font-size:11px; text-transform:uppercase; letter-spacing:0.5px; }
 .settings-popover .badge.deterministic { background:#2d6a4f; }
+.settings-popover .gpu-note { margin-left:120px; font-size:11px; opacity:0.6; margin-top:-8px; margin-bottom:12px; }
 .settings-icon { background:none; border:none; color:#ddd; font-size:13px; cursor:pointer; margin:8px 0; padding:4px 6px; display:flex; align-items:center; gap:4px; }
 .settings-icon:hover { color:#fff; }

@@ -1,4 +1,4 @@
-"""Pytest configuration ensuring project root is importable.
+﻿"""Pytest configuration ensuring project root is importable.
 
 Adds repository root to sys.path explicitly to avoid interpreter/path quirks.
 """
@@ -9,6 +9,14 @@ from pathlib import Path
 import os
 import pytest
 
+try:
+    from core.config import clear_config_cache  # local import
+    _CONFIG_IMPORT_ERROR = None
+except Exception as _exc:  # pragma: no cover - test env fallback
+    def clear_config_cache():  # type: ignore[override]
+        return None
+    _CONFIG_IMPORT_ERROR = _exc
+
 
 @pytest.fixture(autouse=True)
 def _isolate_config_env():  # noqa: D401
@@ -17,7 +25,6 @@ def _isolate_config_env():  # noqa: D401
     - Clear aggregated config cache between tests
     - Restore MIA_CONFIG_DIR to original value
     """
-    from core.config import clear_config_cache  # local import
 
     prev = os.environ.get("MIA_CONFIG_DIR")
     clear_config_cache()
@@ -37,3 +44,4 @@ if str(ROOT) not in sys.path:
 SRC = ROOT / "src"
 if SRC.exists() and str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
+

@@ -15,6 +15,10 @@ import os
 import logging
 import time
 
+# Shared service marker regex (used for sanitation & tests)
+SERVICE_MARKER_RE = r"<\|[^|>]+\|>"
+
+
 class _EphemeralCache:
     """Simple append + prune cache for ephemeral commentary (tests only)."""
 
@@ -34,6 +38,7 @@ class _EphemeralCache:
 
 
 _EPHEMERAL_COMMENTARY_CACHE = _EphemeralCache()
+
 
 # Passport metadata helper (simplified for tests expecting passport_version)
 def _inject_passport_meta(meta: dict) -> dict:  # noqa: D401
@@ -56,6 +61,10 @@ except Exception:  # noqa: BLE001
 
         @staticmethod
         def inc(*_a, **_k):
+            return None
+
+        @staticmethod
+        def inc_fused_marker_sanitization(*_a, **_k):
             return None
  
 
@@ -87,6 +96,9 @@ class HarmonyChannelAdapter:
         self.cfg = cfg
         self._buffer = ""
         self._model_id = str(cfg.get("model_id", "unknown"))
+        # Context identifiers (set later by pipeline/route)
+        self.request_id: Optional[str] = None
+        self.model_id: str = self._model_id
         rez = cfg.get("reasoning", {})
         self._max_rez = int(rez.get("max_tokens", 256))
         self._drop_history = bool(rez.get("drop_from_history", True))
@@ -104,16 +116,16 @@ class HarmonyChannelAdapter:
                 def allow(self, t):
                     return True
             self._guard = _Dummy()
-        # stats
-        self._reasoning_tokens = 0
-        self._final_tokens = 0
-        # store final tokens for finalize re-emission
-        self._final_token_texts: List[str] = []
-        # count of final delta tokens already yielded to consumer
-        self._delivered_final_tokens = 0
-        self._analysis_acc: List[str] = []
+        # stats & per-channel buffers (channel separation v2)
+        self._reasoning_tokens = 0  # analysis tokens count
+        self._final_tokens = 0      # final tokens count
+        # Per-channel accumulators
+        self._analysis_acc = []       # type: List[str]
+        self._final_token_texts = []  # type: List[str]
+        self._commentary_acc = []     # type: List[str]
         self._commentary_tokens = 0
-        self._commentary_acc: List[str] = []  # raw commentary segments
+        # Delivery tracking
+        self._delivered_final_tokens = 0
         self._saw_tool_commentary = False
         self._final_message_closed = False
         self._saw_return_token = False
@@ -125,6 +137,29 @@ class HarmonyChannelAdapter:
             h.setFormatter(logging.Formatter("[HARMONY] %(message)s"))
             self._logger.addHandler(h)
             self._logger.setLevel(logging.DEBUG)
+
+    def set_context(
+        self,
+        *,
+        request_id: Optional[str] = None,
+        model_id: Optional[str] = None,
+    ) -> None:  # noqa: D401
+        """Attach streaming context identifiers to the adapter.
+
+        Parameters
+        ----------
+        request_id: Optional[str]
+            Correlation identifier for the generation request.
+        model_id: Optional[str]
+            Effective model identifier for metrics/events. When provided the
+            internal model id used for metrics is updated as well.
+        """
+
+        if request_id is not None:
+            self.request_id = request_id
+        if model_id is not None and model_id:
+            self.model_id = model_id
+            self._model_id = model_id
 
     def _dbg(self, msg: str):  # noqa: D401
         if self._debug:
@@ -140,21 +175,32 @@ class HarmonyChannelAdapter:
         return re.sub(r"(\s)\1+", r"\1", text)
 
     def _emit_analysis(self, segment: str, out: List[Dict]):
+        # Emit ONLY analysis channel events; never write them into final buffer
         for tok in filter(None, segment.split()):
             if self._reasoning_tokens >= self._max_rez:
                 break
-            # Allow all reasoning tokens (guard only for final channel)
             self._reasoning_tokens += 1
             self._analysis_acc.append(tok)
             out.append({"type": "analysis", "text": tok + " "})
 
     def _emit_final(self, segment: str, out: List[Dict]):
+        # Emit ONLY final channel tokens; guard prevents disallowed tokens
         for tok in filter(None, segment.split()):
+            if not tok:
+                continue
             if self._guard.allow(tok):
-                self._final_tokens += 1
                 token_text = tok + " "
                 self._final_token_texts.append(token_text)
+                self._final_tokens += 1
                 out.append({"type": "delta", "text": token_text})
+            else:
+                # Disallowed token inside final -> treat as leak candidate
+                try:  # metric classification
+                    _metrics.inc_reasoning_leak(
+                        "guard_block_final_token"
+                    )  # type: ignore[attr-defined]
+                except Exception:  # noqa: BLE001
+                    pass
 
     def _emit_commentary(self, segment: str, out: List[Dict]):
         norm = segment.strip()
@@ -289,8 +335,13 @@ class HarmonyChannelAdapter:
         out: List[Dict] = []
         if not chunk:
             return iter(())
+        self._dbg(
+            f"chunk_in: {repr(chunk[:120])}"
+            f"{'...' if len(chunk) > 120 else ''}"
+        )
         # After final channel closed: only record anomalies, no output
         if self._final_message_closed:
+            # After closure: record anomalies only
             try:
                 saw_final = "<|channel|>final" in chunk
                 saw_analysis = "<|channel|>analysis" in chunk
@@ -299,11 +350,16 @@ class HarmonyChannelAdapter:
                     _metrics.inc_unexpected_order("extra_final")
                 if saw_analysis:
                     _metrics.inc_unexpected_order("analysis_after_final")
+                    _metrics.inc_reasoning_leak(
+                        "post_final_analysis"
+                    )  # type: ignore[attr-defined]
                 if saw_commentary:
                     _metrics.inc_unexpected_order("commentary_after_final")
                 if saw_analysis or saw_commentary or saw_final:
-                    # Treat any post-final channel emission as interleaving
                     _metrics.inc_unexpected_order("interleaved_final")
+                    _metrics.inc_channel_merge_anomaly(
+                        "post_finalize_emission"
+                    )  # type: ignore[attr-defined]
             except Exception:  # noqa: BLE001
                 pass
             return iter(())
@@ -341,6 +397,14 @@ class HarmonyChannelAdapter:
         # Wrap iterator to track actual delivery of final delta tokens
         if not out:
             return iter(())
+        else:
+            # Debug summary of events parsed from this chunk
+            if self._debug:
+                kinds = [e.get("type") for e in out]
+                self._dbg(
+                    "events_out: "
+                    f"{kinds} final_closed={self._final_message_closed}"
+                )
 
         adapter = self
 
@@ -366,6 +430,12 @@ class HarmonyChannelAdapter:
     def finalize(self):  # type: ignore[override]
         out: List[Dict] = []
         parse_error = False
+        if self._debug:
+            self._dbg(
+                "finalize_enter "
+                f"buffer_len={len(self._buffer)} "
+                f"final_closed={self._final_message_closed}"
+            )
         if (not self._final_message_closed) and self._buffer:
             # Detect unterminated/incomplete message => parse error
             if (
@@ -392,6 +462,180 @@ class HarmonyChannelAdapter:
             for token_text in missing:
                 out.append({"type": "delta", "text": token_text})
                 self._delivered_final_tokens += 1
+
+        # FINAL GUARD: no analysis tokens should appear in final buffer
+        joined_final = "".join(self._final_token_texts)
+        original_joined_final = joined_final  # retain for debug diff
+    # R1: Fused prefix sanitation (e.g. 'assistantfinal', 'assistant')
+    # Leading only; strip up to 3 repeated fused forms at start.
+        fused_prefix_pattern = re.compile(
+            r'^(?:assistant\s*final){1,3}', re.IGNORECASE
+        )
+        fused_applied = False
+        if joined_final:
+            m = fused_prefix_pattern.match(
+                joined_final.replace("|", "")
+            )  # remove stray pipe if any
+            # Only treat as fused when pattern sits flush at beginning.
+            if m:
+                # Determine slice point (case-insensitive match length)
+                cut_len = len(m.group(0))
+                # Apply on original joined_final by slicing same length.
+                candidate = joined_final[cut_len:]
+                joined_final = candidate.lstrip()
+                fused_applied = True
+                try:  # metrics for fused prefix sanitation
+                    _metrics.inc_reasoning_leak(
+                        "fused_marker_prefix"
+                    )  # type: ignore[attr-defined]
+                    _metrics.inc_fused_marker_sanitization(
+                        "prefix"
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+        # R1b: Remove any residual fused 'assistantfinal' occurrences anywhere
+        # in the final text (case-insensitive). This can happen when the
+        # model echoes the Harmony header and service markers are stripped.
+        if joined_final:
+            cleaned_global = re.sub(
+                r"\bassistant\s*final\b",
+                "",
+                joined_final,
+                flags=re.IGNORECASE,
+            )
+            if cleaned_global != joined_final:
+                joined_final = re.sub(r"\s{2,}", " ", cleaned_global).strip()
+                try:
+                    _metrics.inc_reasoning_leak(
+                        "fused_marker_residue"
+                    )  # type: ignore[attr-defined]
+                    _metrics.inc_fused_marker_sanitization(
+                        "residue"
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+
+        # R2: Duplicate final suppression: collapse exact doubled text.
+    # Apply regardless of fused_applied; the model may emit duplicates
+    # even after prefix scrub.
+        duplicate_applied = False
+        if joined_final:
+            half = len(joined_final) // 2
+            if (
+                len(joined_final) % 2 == 0
+                and half >= 8
+                and joined_final[:half] == joined_final[half:]
+            ):
+                joined_final = joined_final[:half].rstrip()
+                duplicate_applied = True
+                try:
+                    _metrics.inc_reasoning_leak(
+                        "duplicate_final"
+                    )  # type: ignore[attr-defined]
+                except Exception:  # noqa: BLE001
+                    pass
+        if self._debug:
+            self._dbg(
+                "final_joined_len="
+                f"{len(joined_final)} tokens={self._final_tokens} "
+                f"delivered={self._delivered_final_tokens}"
+            )
+        # R6: Prompt echo guard – sometimes an upstream failure (e.g. model
+        # load error or stub path) can cause the assembled prompt (system +
+        # developer) to be emitted as final. Heuristic: detect repeated
+        # system header phrase 'You are ChatGPT' twice OR presence of both
+        # '<|start|>system' and '<|start|>developer' markers. We then
+        # attempt to extract only the last user-visible portion after the
+        # final developer block. If extraction fails, we replace with an
+        # empty string (safer than leaking system instructions) and record
+        # a leak metric.
+        try:
+            sys_dev_both = (
+                '<|start|>system' in joined_final
+                and '<|start|>developer' in joined_final
+            )
+            repeated_header = joined_final.count('You are ChatGPT') >= 2
+            if joined_final and (repeated_header or sys_dev_both):
+                # Split on last developer marker; keep tail after end marker
+                # if present. Then strip service markers.
+                last_dev_idx = joined_final.rfind('<|start|>developer')
+                candidate = joined_final[last_dev_idx:]
+                end_pos = candidate.find('<|end|>')
+                if end_pos != -1:
+                    candidate = candidate[end_pos + len('<|end|>'):]
+                candidate_clean = re.sub(
+                    SERVICE_MARKER_RE, '', candidate
+                ).strip()
+                sanitized = candidate_clean if candidate_clean else ''
+                if sanitized != joined_final:
+                    original_joined_final = joined_final
+                    joined_final = sanitized
+                    _metrics.inc_reasoning_leak(
+                        'prompt_echo'
+                    )  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001
+            pass
+        if (
+            "analysis|" in joined_final
+            or "<|channel|>analysis" in joined_final
+        ):
+            try:
+                _metrics.inc_reasoning_leak(
+                    "analysis_in_final"
+                )  # type: ignore[attr-defined]
+                _metrics.inc_channel_merge_anomaly(
+                    "analysis_token_emitted_as_delta"
+                )  # type: ignore[attr-defined]
+            except Exception:  # noqa: BLE001
+                pass
+            # Defensive strip service markers from final (should not happen)
+            cleaned = re.sub(r"analysis\|[a-zA-Z0-9:_-]*", "", joined_final)
+            if cleaned != joined_final:
+                self._final_token_texts = [cleaned]
+                self._final_tokens = len(cleaned.split())
+                self._delivered_final_tokens = self._final_tokens
+                self._dbg("sanitized_final_removed_analysis_markers")
+        # Extra defensive scrub for any residual service markers
+        if re.search(SERVICE_MARKER_RE, joined_final):
+            cleaned2 = re.sub(SERVICE_MARKER_RE, "", joined_final)
+            if cleaned2 != joined_final:
+                try:
+                    _metrics.inc_reasoning_leak(  # type: ignore[attr-defined]
+                        "service_marker_in_final"
+                    )
+                    _metrics.inc_reasoning_leak(  # type: ignore[attr-defined]
+                        "finalize_sanitize"
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+                self._final_token_texts = [cleaned2]
+                self._final_tokens = len(cleaned2.split())
+                self._delivered_final_tokens = self._final_tokens
+                if self._debug:
+                    removed_len = len(joined_final) - len(cleaned2)
+                    self._dbg(
+                        f"svc_markers_scrubbed removed={removed_len}"
+                    )
+                joined_final = cleaned2
+        # Reconcile token arrays if fused/duplicate suppression modified text
+        if (fused_applied or duplicate_applied) and self._final_token_texts:
+            # Re-tokenize via whitespace split; delta tokens no longer exact
+            # but counts align with visible output post-scrub.
+            self._final_token_texts = [joined_final]
+            self._final_tokens = len(joined_final.split())
+            self._delivered_final_tokens = self._final_tokens
+        # If debug enabled, log diff snapshot if sanitation altered content
+        if self._debug and original_joined_final != joined_final:
+            # Provide short hash summary to avoid massive log spam.
+            try:
+                import hashlib as _hl  # local import to avoid top-level cost
+                before_hash = _hl.sha256(
+                    original_joined_final.encode()
+                ).hexdigest()[:8]
+                after_hash = _hl.sha256(joined_final.encode()).hexdigest()[:8]
+                self._dbg(f"final_sanitize_diff {before_hash}->{after_hash}")
+            except Exception:  # noqa: BLE001
+                self._dbg("final_sanitize_diff hash_failed")
 
         denom = self._reasoning_tokens + self._delivered_final_tokens
         ratio = (
@@ -533,12 +777,41 @@ class HarmonyChannelAdapter:
                     if self._analysis_acc
                     else None
                 ),
+                # Expose sanitized final text as the SSOT for downstream
+                # consumers
+                "final_text": joined_final,
                 "parse_error": parse_error or None,
                 "final_detect_time": None,
                 "normalized_return": True if self._saw_return_token else None,
                 "commentary_retention_summary": summary,
             }
         )
+        # Telemetry: emit ReasoningSuppressedOrNone if no reasoning output
+        try:
+            if self._reasoning_tokens == 0:
+                from core.events import (  # local import
+                    ReasoningSuppressedOrNone,
+                    emit,
+                )
+
+                reason = []
+                if not self._analysis_acc:
+                    reason.append("no-analysis-channel")
+                if self._drop_history:
+                    reason.append("drop_history")
+                if not reason:
+                    reason.append("unknown")
+                emit(
+                    ReasoningSuppressedOrNone(
+                        # request_id may be unset in isolated adapter tests
+                        request_id=self.request_id or "unknown",
+                        model_id=self.model_id,
+                        reason="+".join(reason),
+                        final_tokens=self._delivered_final_tokens,
+                    )
+                )
+        except Exception:  # noqa: BLE001
+            pass
         return iter(out)
 
 

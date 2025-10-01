@@ -225,6 +225,22 @@ class PrimaryPipeline(GenerationPipeline):  # pragma: no cover
             reserved_output_tokens=effective_max,
         )
         adapter = HarmonyChannelAdapter(getattr(llm_cfg, "postproc", {}))
+        try:
+            adapter.set_context(  # type: ignore[attr-defined]
+                request_id=request_id,
+                model_id=model_id,
+            )
+        except AttributeError:
+            # Minimal fallback for legacy adapters without helper
+            try:
+                adapter.request_id = request_id  # type: ignore[attr-defined]
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                adapter.model_id = model_id  # type: ignore[attr-defined]
+                adapter._model_id = model_id  # type: ignore[attr-defined]
+            except Exception:  # noqa: BLE001
+                pass
         ctx = PipelineContext(
             request_id=request_id,
             model_id=model_id,
@@ -294,6 +310,49 @@ class PrimaryPipeline(GenerationPipeline):  # pragma: no cover
     def stream(self, ctx: PipelineContext):  # noqa: D401
         provider = ctx.provider
         adapter = ctx.adapter
+    # If provider is a stub (internal llama stub or our
+    # deterministic stub), wrap its raw token stream into a
+    # Harmony final channel so the adapter emits token events
+    # for SSE API.
+        try:
+            is_internal_stub = getattr(
+                getattr(provider, "_state", None), "stub", False
+            )
+            meta = {}
+            try:
+                info_meta = getattr(provider.info(), "metadata", None)
+                if isinstance(info_meta, dict):
+                    meta = info_meta
+            except Exception:  # noqa: BLE001
+                pass
+            is_stub_provider = bool(meta.get("stub")) or (
+                getattr(provider.__class__, "__name__", "")
+                == "_StubProvider"
+            )
+            if is_internal_stub or is_stub_provider:
+                from mia4.api import abort_registry  # local import
+                # Open final channel
+                for ev in adapter.process_chunk(
+                    "<|start|>assistant<|channel|>final<|message|>"
+                ):
+                    yield ev
+                # Pipe raw tokens through adapter as content
+                raw_stream = provider.stream(
+                    ctx.prompt, **(ctx.merged_sampling or {})
+                )
+                for chunk in raw_stream:
+                    if abort_registry.is_aborted(ctx.request_id):
+                        raise RuntimeError("aborted")
+                    for ev in adapter.process_chunk(chunk):
+                        yield ev
+                # Close channel
+                for ev in adapter.process_chunk("<|return|>"):
+                    yield ev
+                for ev in adapter.finalize():  # type: ignore[attr-defined]
+                    yield ev
+                return
+        except Exception:  # noqa: BLE001
+            pass
         raw_stream = provider.stream(ctx.prompt, **(ctx.merged_sampling or {}))
         # Simple passthrough loop; adapter already harmony
         from mia4.api import abort_registry  # local import to avoid cycles
@@ -301,23 +360,12 @@ class PrimaryPipeline(GenerationPipeline):  # pragma: no cover
             # Abort fast-path (checked per provider chunk)
             if abort_registry.is_aborted(ctx.request_id):
                 raise RuntimeError("aborted")
-            produced = False
             for ev in adapter.process_chunk(  # type: ignore[attr-defined]
                 chunk
             ):
-                produced = True
                 yield ev
-            # If adapter produced nothing (e.g., buffering), emit a
-            # minimal delta only if chunk has user-visible text
-            # (strip service tokens)
-            if not produced:
-                raw = str(chunk) if chunk is not None else ""
-                # strip Harmony service markers like <|...|>
-                import re as _re
-                vis = _re.sub(r"<\|[^|>]+\|>", "", raw)
-                vis = vis.strip()
-                if vis:
-                    yield {"type": "delta", "text": vis[:16]}
+            # SSOT: never emit raw fallback fragments; wait for structured
+            # channel events to avoid leaking Harmony service markers.
         for ev in adapter.finalize():  # type: ignore[attr-defined]
             yield ev
 
@@ -352,12 +400,25 @@ class PrimaryPipeline(GenerationPipeline):  # pragma: no cover
                 cleaned_lines.append(ln)
             return "\n".join(cleaned_lines).lstrip()
 
-        joined = "".join(ctx.fragments)
-        final_text = _strip_echo(
-            ctx.system_prompt_text,
-            ctx.user_prompt,
-            joined,
-        )
+        # Prefer adapter-provided sanitized final text (SSOT) if present.
+        if ctx.sanitized_final_text:
+            final_text = ctx.sanitized_final_text
+        else:
+            joined = (
+                ctx.fragments[0]
+                if len(ctx.fragments) == 1
+                else "".join(ctx.fragments)
+            )
+            final_text = _strip_echo(
+                ctx.system_prompt_text,
+                ctx.user_prompt,
+                joined,
+            )
+        # Defensive duplicate collapse (backend should already sanitize).
+        if final_text and len(final_text) % 2 == 0:
+            half = len(final_text) // 2
+            if half >= 16 and final_text[:half] == final_text[half:]:
+                final_text = final_text[:half].rstrip()
         sampling_summary = {
             "requested_max_tokens": ctx.requested_max_tokens,
             "effective_max_tokens": ctx.effective_max_tokens,
@@ -372,7 +433,8 @@ class PrimaryPipeline(GenerationPipeline):  # pragma: no cover
             "latency_ms": ctx.latency_ms,
             "decode_tps": ctx.decode_tps,
         }
-        # Optional context usage (approx): prompt+output vs model context_length
+    # Optional context usage (approx): prompt+output vs model
+    # context_length
         try:
             _ctx_total = getattr(ctx.provider.info(), "context_length", None)
         except Exception:  # noqa: BLE001
@@ -465,3 +527,4 @@ class PrimaryPipeline(GenerationPipeline):  # pragma: no cover
 
 
 __all__ = ["PrimaryPipeline"]
+

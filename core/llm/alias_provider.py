@@ -47,3 +47,22 @@ class AliasedProvider(ModelProvider):  # pragma: no cover - thin alias
     def unload(self) -> None:  # noqa: D401
         # Do not unload base; multiple aliases may reference it.
         return None
+
+    # GPU layering --------------------------------------------------------
+    def set_n_gpu_layers(self, value):  # noqa: D401
+        setter = getattr(self._base, "set_n_gpu_layers", None)
+        if callable(setter):
+            return setter(value)
+        raise AttributeError("base provider does not support GPU layers")
+
+    def get_effective_n_gpu_layers(self):  # noqa: D401
+        getter = getattr(self._base, "get_effective_n_gpu_layers", None)
+        if callable(getter):
+            return getter()
+        return None
+
+    def get_requested_n_gpu_layers(self):  # noqa: D401
+        getter = getattr(self._base, "get_requested_n_gpu_layers", None)
+        if callable(getter):
+            return getter()
+        return None

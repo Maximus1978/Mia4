@@ -8,9 +8,54 @@ export interface ModelInfo {
   // Optional backend-provided limits to guide UI controls
   limits?: { max_output_tokens?: number; context_length?: number; reasoning_max_tokens?: number };
 }
-export interface UsageEvent { request_id: string; model_id: string; prompt_tokens: number; output_tokens: number; latency_ms: number; decode_tps: number; context_used_tokens?: number; context_total_tokens?: number; context_used_pct?: number; reasoning_tokens?: number; final_tokens?: number; reasoning_ratio?: number; }
+export interface UsageEvent { 
+  request_id: string; 
+  model_id: string; 
+  prompt_tokens: number; 
+  output_tokens: number; 
+  latency_ms: number; 
+  decode_tps: number; 
+  // Time from request acceptance to first token emission (backend measured)
+  first_token_latency_ms?: number;
+  context_used_tokens?: number; 
+  context_total_tokens?: number; 
+  context_used_pct?: number; 
+  reasoning_tokens?: number; 
+  final_tokens?: number; 
+  reasoning_ratio?: number; 
+  // Sampling cap related (optional – backend may include in usage & final frames)
+  cap_applied?: boolean; 
+  effective_max_tokens?: number; 
+  n_gpu_layers?: number | string | null;
+  requested_n_gpu_layers?: number | string | null;
+  gpu_offload?: boolean;
+  gpu_fallback?: boolean;
+}
 export interface TokenEvent { seq: number; text: string; tokens_out: number; request_id: string; model_id: string; }
 export interface ReasoningEvent { request_id: string; model_id: string; reasoning: string; }
+
+export interface AppConfig {
+  ui_mode: string;
+  reasoning_ratio_threshold?: number;
+  generation_timeout_s?: number;
+  generation_initial_idle_grace_s?: number;
+  primary?: {
+    id?: string;
+    temperature?: number;
+    top_p?: number;
+    max_output_tokens?: number;
+    n_gpu_layers?: number | string | null;
+    n_threads?: number | null;
+    n_batch?: number | null;
+  };
+}
+
+export interface CommentaryEvent {
+  request_id: string;
+  model_id: string;
+  text?: string;
+  parsed?: unknown;
+}
 
 // Resolve backend base URL with fallbacks:
 // 1. VITE_MIA_API_URL env (vite) / localStorage override 'mia.api'
@@ -32,10 +77,11 @@ function resolveBaseUrl(): string {
 
 const BASE_URL = resolveBaseUrl();
 
-export async function fetchConfig() {
+export async function fetchConfig(): Promise<AppConfig> {
   const r = await fetch(`${BASE_URL}/config`);
   if (!r.ok) throw new Error('config-failed');
-  return r.json();
+  const data = await r.json();
+  return data as AppConfig;
 }
 
 export async function fetchModels(): Promise<ModelInfo[]> {
@@ -71,8 +117,10 @@ export async function fetchPresets(): Promise<Record<string, Record<string, numb
 
 export interface StreamCallbacks {
   onToken?: (ev: TokenEvent) => void;
+  onFinal?: (ev: { request_id: string; model_id: string; text: string }) => void;
   onUsage?: (ev: UsageEvent) => void;
   onReasoning?: (ev: ReasoningEvent) => void;
+  onCommentary?: (ev: CommentaryEvent) => void;
   onWarning?: (ev: any) => void;
   onError?: (err: { code: string; message: string }) => void; // code = error_type
   onEnd?: (status: string) => void;
@@ -139,13 +187,39 @@ export function streamGenerate(params: { session_id: string; model: string; prom
           }
           switch (event) {
             case 'token': cb.onToken?.(obj as TokenEvent); break;
+            case 'final': {
+              // Dedicated final sanitized text frame (backend guarantee: no service markers)
+              const ftxt = (obj.text || '') as string;
+              cb.onFinal?.({ request_id: obj.request_id, model_id: obj.model_id, text: ftxt });
+              break;
+            }
+            case 'analysis': {
+              const reasoningText = (obj.text ?? obj.reasoning ?? obj.reasoning_text ?? '') as string;
+              if (reasoningText) {
+                cb.onReasoning?.({ request_id: obj.request_id, model_id: obj.model_id, reasoning: reasoningText });
+              }
+              break;
+            }
             case 'reasoning': {
-              // Normalize to ReasoningEvent interface
               const reasoning = (obj.reasoning ?? obj.reasoning_text ?? '') as string;
               cb.onReasoning?.({ request_id: obj.request_id, model_id: obj.model_id, reasoning });
               break;
             }
             case 'usage': cb.onUsage?.(obj as UsageEvent); break;
+            case 'commentary': {
+              const payload = obj as { request_id: string; model_id: string; text?: string };
+              let parsed: unknown = undefined;
+              if (payload && typeof payload.text === 'string') {
+                try { parsed = JSON.parse(payload.text); } catch { parsed = undefined; }
+              }
+              cb.onCommentary?.({
+                request_id: payload?.request_id,
+                model_id: payload?.model_id,
+                text: payload?.text,
+                parsed,
+              });
+              break;
+            }
             case 'warning': cb.onWarning?.(obj); break;
             case 'error': cb.onError?.({ code: obj.code || obj.error_type || 'error', message: obj.message }); break;
             case 'end': cb.onEnd?.(obj.status); break;

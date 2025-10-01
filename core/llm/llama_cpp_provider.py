@@ -30,6 +30,7 @@ from core.events import (
     GenerationChunk,
     GenerationCompleted,
 )
+from core import metrics
 
 
 @dataclass(slots=True)
@@ -38,6 +39,7 @@ class _State:
     loaded: bool = False
     supported_args: set[str] | None = None
     stub: bool = False
+    effective_n_gpu_layers: int | None = None
 
 
 class LlamaCppProvider(ModelProvider):
@@ -71,10 +73,111 @@ class LlamaCppProvider(ModelProvider):
             "n_threads": n_threads,
             "n_batch": n_batch,
         }
-        if n_gpu_layers is not None:
-            self._base_sampling["n_gpu_layers"] = n_gpu_layers
+        normalized_gpu_layers = self._normalize_n_gpu_layers_input(
+            n_gpu_layers
+        )
+        if normalized_gpu_layers is not None:
+            self._base_sampling["n_gpu_layers"] = normalized_gpu_layers
         self._state = _State()
         self._lock = Lock()
+
+    # helpers --------------------------------------------------------------
+    def _normalize_n_gpu_layers_input(self, raw: Any) -> int | str | None:
+        if raw is None:
+            return None
+        if isinstance(raw, str):
+            val = raw.strip()
+            if not val:
+                return None
+            lowered = val.lower()
+            if lowered == "auto":
+                return "auto"
+            try:
+                return int(val)
+            except ValueError:
+                return None
+        if isinstance(raw, (int, float)):
+            try:
+                return int(raw)
+            except (TypeError, ValueError):
+                return None
+        return None
+
+    def _resolve_n_gpu_layers(self, raw: Any) -> int | None:
+        if raw is None:
+            return None
+        if isinstance(raw, str):
+            lowered = raw.strip().lower()
+            if lowered == "auto":
+                return -1
+            if not lowered:
+                return None
+            try:
+                raw = int(lowered)
+            except ValueError:
+                return None
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            return None
+
+    def _sync_info_metadata(self) -> None:
+        info_cache = getattr(self, "_info_cache", None)
+        if info_cache is None:
+            return
+        try:
+            from core.llm.provider import ModelInfo as _MI
+
+            meta = dict(info_cache.metadata or {})
+            meta["stub"] = self._state.stub
+            meta["requested_n_gpu_layers"] = self._base_sampling.get(
+                "n_gpu_layers"
+            )
+            meta["effective_n_gpu_layers"] = (
+                self._state.effective_n_gpu_layers
+            )
+            meta["gpu_offload"] = bool(
+                self._state.effective_n_gpu_layers
+                and self._state.effective_n_gpu_layers > 0
+            )
+            new_info = _MI(
+                id=info_cache.id,
+                role=info_cache.role,
+                capabilities=info_cache.capabilities,
+                context_length=info_cache.context_length,
+                revision=info_cache.revision,
+                metadata=meta,
+            )
+            setattr(self, "_info_cache", new_info)
+
+            def _info_override():  # noqa: D401
+                return getattr(self, "_info_cache")
+
+            self.info = _info_override  # type: ignore
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _build_llama_kwargs(self) -> Dict[str, Any]:
+        kwargs: Dict[str, Any] = {
+            "model_path": self._model_path,
+            "n_ctx": self._context_length,
+            "logits_all": False,
+            "embedding": False,
+        }
+        n_gpu_layers = self._resolve_n_gpu_layers(
+            self._base_sampling.get("n_gpu_layers")
+        )
+        if n_gpu_layers is not None:
+            kwargs["n_gpu_layers"] = n_gpu_layers
+        for key in ("n_threads", "n_batch"):
+            val = self._base_sampling.get(key)
+            if val is None:
+                continue
+            try:
+                kwargs[key] = int(val)
+            except (TypeError, ValueError):
+                continue
+        return kwargs
 
     # load -----------------------------------------------------------------
     def load(self) -> None:  # noqa: D401
@@ -91,6 +194,11 @@ class LlamaCppProvider(ModelProvider):
                     self._state.stub = True
                     self._state.loaded = True
                     self._loaded = True  # legacy flag
+                    self._state.effective_n_gpu_layers = (
+                        self._resolve_n_gpu_layers(
+                            self._base_sampling.get("n_gpu_layers")
+                        )
+                    )
                     emit(
                         ModelLoaded(
                             model_id=self._model_id,
@@ -99,13 +207,37 @@ class LlamaCppProvider(ModelProvider):
                             revision=None,
                         )
                     )
+                    self._sync_info_metadata()
                     return
-                self._state.llama = Llama(
-                    model_path=self._model_path,
-                    n_ctx=self._context_length,
-                    logits_all=False,
-                    embedding=False,
-                )
+                llama_kwargs = self._build_llama_kwargs()
+                resolved_layers = llama_kwargs.get("n_gpu_layers")
+                llama_obj = None
+                try:
+                    llama_obj = Llama(**llama_kwargs)
+                    self._state.effective_n_gpu_layers = resolved_layers
+                except Exception as gpu_exc:  # noqa: BLE001
+                    if llama_kwargs.get("n_gpu_layers") not in (None, 0):
+                        fallback_kwargs = dict(llama_kwargs)
+                        fallback_kwargs["n_gpu_layers"] = 0
+                        try:
+                            llama_obj = Llama(**fallback_kwargs)
+                            metrics.inc(
+                                "llama_gpu_fallback_total",
+                                {"model": self._model_id},
+                            )
+                            self._state.effective_n_gpu_layers = (
+                                fallback_kwargs.get("n_gpu_layers")
+                            )
+                        except Exception:  # noqa: BLE001
+                            raise gpu_exc
+                    else:
+                        raise
+                if (
+                    self._state.effective_n_gpu_layers is None
+                    and resolved_layers is not None
+                ):
+                    self._state.effective_n_gpu_layers = resolved_layers
+                self._state.llama = llama_obj
                 import inspect
 
                 sig = inspect.signature(self._state.llama.__call__)
@@ -120,6 +252,7 @@ class LlamaCppProvider(ModelProvider):
                         revision=None,
                     )
                 )
+                self._sync_info_metadata()
             except Exception as e:  # noqa: BLE001
                 code = validate_error_type(map_exception(e, "model.load"))
                 emit(
@@ -133,6 +266,11 @@ class LlamaCppProvider(ModelProvider):
                 self._state.stub = True
                 self._state.loaded = True
                 self._loaded = True  # legacy flag
+                self._state.effective_n_gpu_layers = (
+                    self._resolve_n_gpu_layers(
+                        self._base_sampling.get("n_gpu_layers")
+                    )
+                )
                 emit(
                     ModelLoaded(
                         model_id=self._model_id,
@@ -141,6 +279,7 @@ class LlamaCppProvider(ModelProvider):
                         revision=None,
                     )
                 )
+                self._sync_info_metadata()
 
     # helpers --------------------------------------------------------------
     def _filter_sampling(
@@ -163,6 +302,16 @@ class LlamaCppProvider(ModelProvider):
     def info(self) -> ModelInfo:  # noqa: D401
         caps = getattr(self, "_manifest_capabilities", ("chat",))
         meta = {"stub": self._state.stub}
+        meta["requested_n_gpu_layers"] = self._base_sampling.get(
+            "n_gpu_layers"
+        )
+        meta["effective_n_gpu_layers"] = (
+            self._state.effective_n_gpu_layers
+        )
+        meta["gpu_offload"] = bool(
+            self._state.effective_n_gpu_layers
+            and self._state.effective_n_gpu_layers > 0
+        )
         # Attach passport_version if a passport file exists adjacent to model
         try:
             model_path = Path(self._model_path)
@@ -504,6 +653,50 @@ class LlamaCppProvider(ModelProvider):
         self._state.llama = None
         self._state.loaded = False
         self._state.supported_args = None
+        self._state.effective_n_gpu_layers = None
+
+    # configuration --------------------------------------------------------
+    def set_n_gpu_layers(self, value: Any) -> dict[str, Any]:  # noqa: D401
+        normalized = self._normalize_n_gpu_layers_input(value)
+        if value is not None and normalized is None:
+            raise ValueError("invalid-n_gpu_layers")
+        with self._lock:
+            current = self._normalize_n_gpu_layers_input(
+                self._base_sampling.get("n_gpu_layers")
+            )
+            if normalized == current:
+                return {
+                    "changed": False,
+                    "effective": self._state.effective_n_gpu_layers,
+                    "requested": self._base_sampling.get("n_gpu_layers"),
+                }
+            if normalized is None:
+                self._base_sampling.pop("n_gpu_layers", None)
+            else:
+                self._base_sampling["n_gpu_layers"] = normalized
+            # Reset state to force reload
+            self._state = _State()
+            self._loaded = False
+        self.load()
+        self._sync_info_metadata()
+        effective = self._state.effective_n_gpu_layers
+        requested = self._base_sampling.get("n_gpu_layers")
+        fallback = bool(
+            requested not in (None, "auto", 0)
+            and (effective in (None, 0))
+        )
+        return {
+            "changed": True,
+            "effective": effective,
+            "requested": requested,
+            "fallback": fallback,
+        }
+
+    def get_effective_n_gpu_layers(self) -> int | None:  # noqa: D401
+        return self._state.effective_n_gpu_layers
+
+    def get_requested_n_gpu_layers(self) -> Any:  # noqa: D401
+        return self._base_sampling.get("n_gpu_layers")
 
 
 __all__ = ["LlamaCppProvider"]

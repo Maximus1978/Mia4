@@ -52,6 +52,8 @@ class PipelineContext:
     decode_tps: float | None = None
     system_prompt_text: str | None = None  # for echo strip
     user_prompt: str | None = None  # original user prompt (pre framed)
+    # If the adapter produced a sanitized final_text, prefer it verbatim.
+    sanitized_final_text: str | None = None
 
 
 @dataclass

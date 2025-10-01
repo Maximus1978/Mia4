@@ -89,6 +89,8 @@ class LLMConfig(BaseModel):
     load_timeout_ms: int = 15000
     # Generation timeout (server-side streaming hard stop)
     generation_timeout_s: int = 120
+    # Additional grace period before first token (covers model warm-up)
+    generation_initial_idle_grace_s: int = 45
     # Reasoning presets: mode -> overrides for generation params
     reasoning_presets: Dict[str, Dict[str, float | int]] = Field(
         default_factory=lambda: {
