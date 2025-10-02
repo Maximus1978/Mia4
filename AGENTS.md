@@ -56,11 +56,40 @@
 - Specs and backlog: `docs` contains a subfolder whose name is the Cyrillic letters "TZ"; it holds product specs, sprint plans, and UX notes. Translate when needed for external communication.
 - Scripts: `scripts/` hosts perf baselines, launch helpers (`ensure_venv.bat`, `run_all.bat`), and debugging tools (`stability_probe.py`).
 
+## When to Read What
+
+### 🆕 **First Time Here?**
+1. Read **AGENTS.md** (this file) → Architecture overview + invariants
+2. Read **`.instructions.md`** → Core principles + working style
+3. You're ready to start!
+
+### 🚀 **Starting a Sprint / New Bug?**
+1. Read **`SPRINT.md`** → Current context, active tasks, root cause analysis
+2. Check "Next Steps" section → Know exactly what to do
+3. Review "Risks & Mitigations" → Understand blockers
+
+### 🔄 **Continuing Work?**
+1. Check **`SPRINT.md`** "Active Tasks" → See progress
+2. Update completed tasks in `SPRINT.md`
+3. Add new findings to "Notes & Observations"
+
+### 📚 **Need Reference?**
+- **Architecture / Config / Testing** → `AGENTS.md` (this file)
+- **Principles / Rules / Workflow** → `.instructions.md`
+- **Current sprint details** → `SPRINT.md`
+- **ADRs** → `docs/ADR/` for design decisions
+- **Changelogs** → `docs/changelog/` for feature history
+
+---
+
 ## Getting Started Checklist for Agents
-1. Read `.instructions.md`, the latest relevant changelog entries, associated ADRs and `Prompt for continuation.md`.
-2. Identify affected tests and docs; update acceptance markdown if UI or API changes.
-3. Implement the change with metrics and event instrumentation in place.
-4. Run targeted pytest suites plus any smoke or perf checks required; collect results.
-5. Prepare manual UI validation steps (reasoning ratio badges, CAP indicators, cancellation UX, etc.).
-6. Summarise work, highlight risks, note outstanding follow-ups, and stage for commit.
+
+1. Read `SPRINT.md` to understand current sprint goal and active tasks.
+2. Identify affected files from "Implementation Plan" section.
+3. Check affected tests and docs; update acceptance markdown if UI or API changes.
+4. Implement changes with metrics and event instrumentation in place.
+5. Run targeted pytest suites plus any smoke or perf checks required; collect results.
+6. Prepare manual UI validation steps (reasoning ratio badges, CAP indicators, cancellation UX, etc.).
+7. Update `SPRINT.md`: mark completed tasks, add new findings, update "Next Steps".
+8. Summarise work, highlight risks, note outstanding follow-ups, and stage for commit.
 
