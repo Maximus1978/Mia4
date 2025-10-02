@@ -24,6 +24,8 @@ class PrimaryLLMConfig(BaseModel):
     # CPU tuning placeholders (threads and batch size)
     n_threads: int | None = None
     n_batch: int | None = None
+    # Enforce GPU requirement: fail load if GPU not available (P0 perf fix)
+    require_gpu: bool = False
 
     @field_validator("temperature")
     @classmethod

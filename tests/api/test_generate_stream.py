@@ -126,6 +126,45 @@ def test_model_switch(tmp_path):
         os.chdir(cwd)
 
 
+def test_reasoning_preset_event(tmp_path):
+    # Ensure reasoning_preset recorded (latency metric present).
+    cwd = Path.cwd()
+    reset_for_tests()
+    reset_listeners_for_tests()
+    try:
+        os.chdir(tmp_path)
+        _setup_env(tmp_path)
+        client = TestClient(app)
+        with client.stream(
+            "POST",
+            "/generate",
+            json={
+                "session_id": "s2",
+                "model": "modelA",
+                "prompt": "why",
+                "overrides": {"reasoning_preset": "low"},
+            },
+        ) as r:
+            assert r.status_code == 200
+            # drain minimal
+            for line in r.iter_lines():
+                if line.startswith("event: end"):
+                    break
+        snap = snapshot()
+        # histogram presence
+        assert any(
+            k.startswith("generation_first_token_latency_ms")
+            for k in snap["histograms"].keys()
+        )
+        # counter for reasoning preset
+        assert any(
+            k.startswith("reasoning_preset_total{mode=low}")
+            for k in snap["counters"].keys()
+        ), snap["counters"].keys()
+    finally:
+        os.chdir(cwd)
+
+ 
 def test_decode_tps_positive(tmp_path):
     cwd = Path.cwd()
     try:

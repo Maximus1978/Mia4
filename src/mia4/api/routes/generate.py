@@ -306,6 +306,7 @@ def generate(req: GenerateRequest):  # noqa: D401
 
     preset_vals: dict[str, object] = {}
     preset_name: str | None = None
+    reasoning_max_tokens_preset: int | None = None
     if effective_reasoning_mode:
         sampling_origin_layers.append("preset")
         try:
@@ -313,6 +314,17 @@ def generate(req: GenerateRequest):  # noqa: D401
                 {}, effective_reasoning_mode
             )
             preset_name = reasoning_mode
+            # Extract reasoning_max_tokens separately (not a generation param)
+            try:
+                presets_dict = get_config().llm.reasoning_presets
+                if effective_reasoning_mode in presets_dict:
+                    preset_obj = presets_dict[effective_reasoning_mode]
+                    # Pydantic object: use getattr or direct access
+                    reasoning_max_tokens_preset = getattr(
+                        preset_obj, "reasoning_max_tokens", None
+                    )
+            except Exception:  # noqa: BLE001
+                pass
         except KeyError:
             preset_vals = {}
         for k, v in preset_vals.items():
@@ -374,6 +386,7 @@ def generate(req: GenerateRequest):  # noqa: D401
         user_sampling=base_kwargs,  # already merged passport/preset/user
         passport_defaults=passport_defaults,
         sampling_origin=sampling_origin,
+        reasoning_max_tokens=reasoning_max_tokens_preset,
     )
     # ctx.prompt already harmony-framed; no separate variable needed
     prompt_tokens = ctx.prompt_tokens

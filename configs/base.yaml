@@ -11,6 +11,8 @@ llm:
     min_p: 0.05
     max_output_tokens: 1024
     n_gpu_layers: auto
+    # Enforce GPU requirement to prevent silent CPU fallback (P0 perf)
+    require_gpu: true
   lightweight:
     # Passport: docs/ТЗ/passports/phi-3.5-mini-instruct-q3_k_s.md
     id: phi-3.5-mini-instruct-q3_k_s
@@ -28,8 +30,8 @@ llm:
         plan_ms: 6000
   load_timeout_ms: 15000
   # Streaming generation timeout (seconds) – UI later will allow override; best perf default.
-  generation_timeout_s: 120
-  generation_initial_idle_grace_s: 45
+  generation_timeout_s: 300
+  generation_initial_idle_grace_s: 90
   # Fake mode (DummyProvider) for dev/tests. Managed via config (no scattered env). UI planned.
   fake: false
   reasoning_presets:
@@ -40,11 +42,11 @@ llm:
     medium:
       temperature: 0.7
       top_p: 0.92
-      reasoning_max_tokens: 256
+      reasoning_max_tokens: 150
     high:
       temperature: 0.85
       top_p: 0.95
-      reasoning_max_tokens: 512
+      reasoning_max_tokens: 256
   # Models whose estimated size (file size GiB) >= threshold treated as heavy; switching triggers unload.
   heavy_model_vram_threshold_gb: 10.0
   system_prompt:

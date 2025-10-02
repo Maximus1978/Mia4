@@ -216,6 +216,27 @@ class LlamaCppProvider(ModelProvider):
                     llama_obj = Llama(**llama_kwargs)
                     self._state.effective_n_gpu_layers = resolved_layers
                 except Exception as gpu_exc:  # noqa: BLE001
+                    # Check if require_gpu is active (from config)
+                    require_gpu = False
+                    try:
+                        from core.config import get_config as _gc
+                        require_gpu = getattr(
+                            _gc().llm.primary, 'require_gpu', False
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
+                    if (
+                        require_gpu
+                        and llama_kwargs.get("n_gpu_layers") not in (None, 0)
+                    ):
+                        # Hard failure: no CPU fallback allowed
+                        # Set state to prevent stub fallback in outer handler
+                        self._state.stub = False
+                        self._state.loaded = False
+                        self._loaded = False
+                        # Mark as critical error that should not be caught
+                        gpu_exc._require_gpu_failure = True  # type: ignore
+                        raise gpu_exc
                     if llama_kwargs.get("n_gpu_layers") not in (None, 0):
                         fallback_kwargs = dict(llama_kwargs)
                         fallback_kwargs["n_gpu_layers"] = 0
@@ -254,6 +275,9 @@ class LlamaCppProvider(ModelProvider):
                 )
                 self._sync_info_metadata()
             except Exception as e:  # noqa: BLE001
+                # Check if this is a require_gpu failure that must propagate
+                if getattr(e, '_require_gpu_failure', False):
+                    raise
                 code = validate_error_type(map_exception(e, "model.load"))
                 emit(
                     ModelLoadFailed(

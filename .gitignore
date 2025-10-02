@@ -56,6 +56,7 @@ node_modules/
 chatgpt-design-app/node_modules/
 chatgpt-design-app/dist/
 chatgpt-design-app/.vite/
+.vite/
 
 # Local launch temp
 .launch_tmp/

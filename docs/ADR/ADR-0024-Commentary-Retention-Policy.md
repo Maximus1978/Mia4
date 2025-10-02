@@ -1,6 +1,6 @@
 # ADR-0024: Commentary Channel Retention & Privacy Policy
 
-Status: Accepted
+Status: Draft
 Date: 2025-09-03
 
 ## Контекст

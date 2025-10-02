@@ -64,6 +64,25 @@ def test_llama_provider_auto_fallback(monkeypatch):
 
     _install_dummy_llama(monkeypatch, FlakyLlama)
 
+    # Mock config to return require_gpu=False (allow fallback)
+    from core.config.schemas.llm import PrimaryLLMConfig
+    mock_primary = PrimaryLLMConfig(
+        id="model-test",
+        n_gpu_layers="auto",
+        require_gpu=False,  # Allow CPU fallback
+    )
+
+    class MockLLMConfig:
+        primary = mock_primary
+
+    class MockConfig:
+        llm = MockLLMConfig()
+
+    import core.config
+    monkeypatch.setattr(
+        core.config, "get_config", lambda: MockConfig()
+    )
+
     provider = LlamaCppProvider(
         model_path="dummy://model",
         model_id="model-test",

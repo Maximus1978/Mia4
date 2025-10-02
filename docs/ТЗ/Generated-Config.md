@@ -13,6 +13,7 @@
 | skip_checksum | bool | False |  |
 | load_timeout_ms | int | 15000 |  |
 | generation_timeout_s | int | 120 |  |
+| generation_initial_idle_grace_s | int | 45 |  |
 | reasoning_presets | Dict | PydanticUndefined |  |
 | system_prompt | Dict | PydanticUndefined |  |
 | postproc | Dict | PydanticUndefined |  |
@@ -62,6 +63,7 @@
 | n_gpu_layers | str | int | auto |  |
 | n_threads | int | None | (required) |  |
 | n_batch | int | None | (required) |  |
+| require_gpu | bool | False |  |
 
 ## RAGConfig (rag)
 

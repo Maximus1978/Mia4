@@ -1,0 +1,71 @@
+"""Test reasoning via API endpoint."""
+import requests
+import json
+
+url = "http://localhost:8000/generate"
+payload = {
+    "session_id": "test-reasoning-002",
+    "model": "gpt-oss-20b-mxfp4",
+    "prompt": (
+        "What are the key trade-offs between consistency and availability "
+        "in distributed systems? Explain CAP theorem."
+    ),
+    "overrides": {
+        "reasoning_preset": "high"
+    }
+}
+
+print("Sending request...")
+print(f"Payload: {json.dumps(payload, indent=2)}")
+
+response = requests.post(url, json=payload, stream=True, timeout=120)
+
+print(f"\nStatus: {response.status_code}")
+
+if response.status_code != 200:
+    print(f"ERROR Response: {response.text[:500]}")
+    exit(1)
+
+print("\n=== SSE EVENTS ===")
+
+analysis_events = []
+final_events = []
+other_events = []
+
+for line in response.iter_lines():
+    if not line:
+        continue
+    line = line.decode('utf-8')
+    
+    if line.startswith('event:'):
+        event_type = line.split(':', 1)[1].strip()
+    elif line.startswith('data:'):
+        data = line.split(':', 1)[1].strip()
+        try:
+            data_obj = json.loads(data)
+            event_str = f"{event_type}: {json.dumps(data_obj, ensure_ascii=False)[:150]}"
+            
+            if event_type == 'analysis':
+                analysis_events.append(event_str)
+                print(f"✓ {event_str}")
+            elif event_type == 'token' and data_obj.get('delta_type') == 'final':
+                final_events.append(event_str)
+                print(f"  {event_str}")
+            elif event_type in ['start', 'usage', 'end']:
+                other_events.append(event_str)
+                print(f"• {event_str}")
+            else:
+                other_events.append(event_str)
+                print(f"? {event_str}")
+        except:
+            print(f"  RAW: {line[:100]}")
+
+print(f"\n=== SUMMARY ===")
+print(f"Analysis events: {len(analysis_events)}")
+print(f"Final token events: {len(final_events)}")
+print(f"Other events: {len(other_events)}")
+
+if not analysis_events:
+    print("\n❌ NO ANALYSIS EVENTS - Reasoning not working!")
+else:
+    print("\n✓ Analysis events detected - reasoning IS working")

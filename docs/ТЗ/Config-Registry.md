@@ -16,6 +16,7 @@
 | llm.primary.n_gpu_layers | int | auto | llm | no | Авто распределение на GPU |
 | llm.primary.n_threads | int? | null | llm | yes | Кол-во потоков CPU (None → llama.cpp default) |
 | llm.primary.n_batch | int? | null | llm | yes | Batch size для context / eval (None → llama.cpp default) |
+| llm.primary.require_gpu | bool | false | llm | no | Блокирует загрузку при GPU fail вместо CPU fallback (enforcement для производства) |
 | llm.lightweight.id | string | phi-3.5-mini-instruct-q3_k_s | llm | no | Lightweight (паспорт: [phi-3.5-mini-instruct-q3_k_s](passports/phi-3.5-mini-instruct-q3_k_s.md)) |
 | llm.lightweight.temperature | float | 0.4 | llm | yes | Температура lightweight |
 | llm.system_prompt.version | int | 1 | llm | no | Версия базового системного промпта |
@@ -25,6 +26,7 @@
 | llm.optional_models.* | map | — | llm | yes | Доп. модели (judge alias, experimental) |
 | llm.heavy_model_vram_threshold_gb | float | 10.0 | llm | yes | Порог размера (GiB) для auto-unload heavy |
 | llm.generation_timeout_s | int | 120 | llm | no | Ограничение времени генерации (stream hard stop) |
+| llm.generation_initial_idle_grace_s | float | 45.0 | llm | no | Grace period (сек) до timeout на первый токен; для прогрева модели |
 | llm.fake | bool | false | llm | yes | Использовать DummyProvider для gguf (dev/tests) |
 | llm.skip_checksum | bool | false | llm | no | Для dev среды |
 | llm.load_timeout_ms | int | 15000 | llm | no | Ожидание загрузки файла |

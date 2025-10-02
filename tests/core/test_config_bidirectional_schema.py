@@ -39,7 +39,8 @@ IGNORE_REGISTRY_ONLY = {
 }
 IGNORE_RUNTIME_ONLY = {
     # Container nodes not explicitly listed in registry (only their leaves)
-    'llm', 'llm.primary', 'llm.lightweight',
+    'llm', 'llm.primary', 'llm.lightweight', 'llm.reasoning_presets.low',
+    'llm.reasoning_presets.medium', 'llm.reasoning_presets.high',
     'embeddings', 'embeddings.main', 'embeddings.fallback',
     'rag', 'rag.hybrid', 'rag.normalize',
     'emotion', 'emotion.model', 'emotion.fsm',

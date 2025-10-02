@@ -22,8 +22,8 @@ if /I "%MODE%"=="admin" (
   REM Force dev server usage for full dev features
   set MIA_UI_STATIC=0
   set MIA_DEV_AUTO=1
-  REM Nudge GPU layers for heavy GGUF if not explicitly set
-  if "%MIA__llm__primary__n_gpu_layers%"=="" set MIA__llm__primary__n_gpu_layers=20
+  REM Nudge GPU layers for heavy GGUF if not explicitly set (RTX 4070: 40 layers optimal for 20B Q4_K_M per docs/ТЗ/Характеристики ПК.md)
+  if "%MIA__llm__primary__n_gpu_layers%"=="" set MIA__llm__primary__n_gpu_layers=40
 ) else (
   set MIA_UI_MODE=user
   set MIA__logging__level=info

@@ -62,6 +62,7 @@ class PrimaryPipeline(GenerationPipeline):  # pragma: no cover
         dev_block = dev_block_text
         if not dev_block.startswith("# Instructions"):
             dev_block = "# Instructions\n" + dev_block.strip()
+            dev_block = "# Instructions\n" + dev_block.strip()
     # Build history with a simple character budget heuristic
     # (~4 chars/token)
         chars_per_token = 4
@@ -135,6 +136,7 @@ class PrimaryPipeline(GenerationPipeline):  # pragma: no cover
         user_sampling: dict,
         passport_defaults: dict,
         sampling_origin: str | None,
+        reasoning_max_tokens: int | None = None,
     ) -> PipelineContext:  # noqa: D401
         base_kwargs = dict(user_sampling)
         cap_applied = False
@@ -229,6 +231,7 @@ class PrimaryPipeline(GenerationPipeline):  # pragma: no cover
             adapter.set_context(  # type: ignore[attr-defined]
                 request_id=request_id,
                 model_id=model_id,
+                reasoning_max_tokens=reasoning_max_tokens,
             )
         except AttributeError:
             # Minimal fallback for legacy adapters without helper

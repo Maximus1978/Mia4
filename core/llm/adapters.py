@@ -99,6 +99,7 @@ class HarmonyChannelAdapter:
         # Context identifiers (set later by pipeline/route)
         self.request_id: Optional[str] = None
         self.model_id: str = self._model_id
+        self._first_chunk = True  # Flag to prepend prompt suffix
         rez = cfg.get("reasoning", {})
         self._max_rez = int(rez.get("max_tokens", 256))
         self._drop_history = bool(rez.get("drop_from_history", True))
@@ -143,6 +144,7 @@ class HarmonyChannelAdapter:
         *,
         request_id: Optional[str] = None,
         model_id: Optional[str] = None,
+        reasoning_max_tokens: Optional[int] = None,
     ) -> None:  # noqa: D401
         """Attach streaming context identifiers to the adapter.
 
@@ -153,6 +155,9 @@ class HarmonyChannelAdapter:
         model_id: Optional[str]
             Effective model identifier for metrics/events. When provided the
             internal model id used for metrics is updated as well.
+        reasoning_max_tokens: Optional[int]
+            Override reasoning token budget from preset. When provided,
+            replaces the postproc.reasoning.max_tokens default.
         """
 
         if request_id is not None:
@@ -160,6 +165,8 @@ class HarmonyChannelAdapter:
         if model_id is not None and model_id:
             self.model_id = model_id
             self._model_id = model_id
+        if reasoning_max_tokens is not None and reasoning_max_tokens > 0:
+            self._max_rez = reasoning_max_tokens
 
     def _dbg(self, msg: str):  # noqa: D401
         if self._debug:
@@ -365,6 +372,12 @@ class HarmonyChannelAdapter:
             return iter(())
         # Normal flow
         self._buffer += chunk
+        # On first chunk, prepend <|start|>assistant if not present
+        # (model generates from there, but doesn't emit the prompt suffix)
+        if self._first_chunk:
+            self._first_chunk = False
+            if "<|start|>assistant" not in self._buffer:
+                self._buffer = "<|start|>assistant" + self._buffer
         # Wait until we see the assistant preamble
         if "<|start|>assistant" not in self._buffer:
             if len(self._buffer) > 512:

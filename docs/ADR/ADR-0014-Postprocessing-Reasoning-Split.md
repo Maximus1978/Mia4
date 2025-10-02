@@ -144,33 +144,6 @@ Backward Compatibility: Additive changes—`leak_detected` optional field in fin
 
 Status: ISSUE marked Resolved in instructions (section 4.9). Future improvements tracked under Harmony Stage 2 backlog.
 
-## Ephemeral Reasoning UX Pattern (2025-09-05 Addition)
-
-Objective: Provide transparent access to the most recent chain-of-thought for debugging without persisting it beyond the active response.
-
-Contract:
-
-- Streaming channel `analysis` supplies incremental reasoning tokens.
-- If `llm.postproc.reasoning.drop_from_history=true` then the final adapter event MUST set `reasoning_text=null` (never materialize full reasoning in stored history structures).
-- UI may buffer streamed tokens in volatile memory and display a collapsible panel (e.g. button "Reasoning" → expand). Panel content is discarded on any new generation request.
-- When `drop_from_history=false`, adapter includes `reasoning_text` in final event (auditable / offline review mode).
-
-Non-Goals:
-
-- Server-side caching beyond in-flight request lifetime.
-- Persisting reasoning across sessions or adding export endpoints.
-
-Test Coverage Added (2025-09-05):
-
-- `test_ephemeral_reasoning_drop_from_history_true` ensures suppression.
-- `test_reasoning_retained_when_drop_from_history_false` ensures inclusion.
-
-Security / Privacy Rationale:
-
-- Minimizes exposure surface by default; developers must explicitly opt-in to retention by flipping a single boolean.
-- Prevents accidental logging of potentially sensitive intermediate reasoning.
-
-
 ## Migration Note (2025-09-01 Supersession Update)
 
 ADR-0020 Accepted: marker directive injection MUST NOT be used for Harmony-capable models when `llm.harmony.channels_parser.enabled=true`. This ADR persists for:

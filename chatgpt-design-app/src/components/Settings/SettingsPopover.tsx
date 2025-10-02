@@ -187,7 +187,10 @@ const SettingsPopover: React.FC<Props> = ({ open, onClose, defaults, value, onCh
               context: {limits.context_length ?? 'n/a'}
               {typeof limits.reasoning_max_tokens === 'number' && (
                 <>
-                  {' '}| reasoning tokens: {limits.reasoning_max_tokens}
+                  {' '}| reasoning tokens: {
+                    // Show current preset's reasoning_max_tokens, not the model's max
+                    presets?.[local.reasoningPreset]?.reasoning_max_tokens ?? limits.reasoning_max_tokens
+                  }
                 </>
               )}
             </div>
